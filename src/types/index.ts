@@ -22,6 +22,7 @@ export type DonationEvent = {
   paymentStatus: PaymentStatus
   createdAt?: Timestamp
   displayed?: boolean
+  isTest?: boolean
 }
 
 export const MIN_AMOUNTS: Record<DonationType, number> = {

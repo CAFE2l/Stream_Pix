@@ -41,12 +41,16 @@ export default function Dashboard() {
       const donationsCol = collection(db, 'users', uid, 'donations')
       const snaps = await getDocs(donationsCol)
       let t = 0
+      let count = 0
       snaps.forEach((d: DocumentSnapshot) => {
         const data = d.data() as DonationEvent
-        t += data.amount || 0
+        if (data.isTest !== true && data.paymentStatus === 'paid') {
+          t += data.amount || 0
+          count++
+        }
       })
       setTotal(t)
-      setAlertsCount(snaps.size)
+      setAlertsCount(count)
     }
 
     const generateQrCode = async () => {
@@ -116,6 +120,7 @@ export default function Dashboard() {
         type,
         message: 'Teste rápido do overlay',
         paymentStatus: 'paid',
+        isTest: true,
         createdAt: serverTimestamp(),
         displayed: false,
       })
