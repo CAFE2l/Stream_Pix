@@ -54,6 +54,7 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+        <Route path="/overlay/qr/:streamerId" element={<OverlayQR />} />
         <Route path="/overlay/:userId" element={<Overlay />} />
         <Route path="/simulate/:userId" element={<SimulatePix />} />
         <Route path="/send/:streamerId" element={<SendDonation />} />
