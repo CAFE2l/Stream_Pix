@@ -148,7 +148,6 @@ export default function Overlay() {
   useEffect(() => {
     finishingRef.current = false
     completedRef.current = false
-    clearAllTimers()
 
     if (active?.type === 'audio' && audioRef.current && active.audioUrl) {
       audioRef.current.src = active.audioUrl
@@ -169,7 +168,7 @@ export default function Overlay() {
         .then(() => setVideoSoundLocked(false))
         .catch(() => setVideoSoundLocked(true))
     }
-  }, [active?.id, clearAllTimers])
+  }, [active?.id])
 
   useEffect(() => {
     if (!active || !soundEnabled) return
