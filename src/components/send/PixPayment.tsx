@@ -11,25 +11,28 @@ type PixPaymentProps = {
 export function generateStaticPix(key: string, value: number): string {
   const amountStr = value.toFixed(2)
   const merchantName = 'PIX'
-  const merchantCity = 'BRASIL'
+  const merchantCity = 'SAO PAULO'
 
-  function tlv(id: string, value: string): string {
-    return id + value.length.toString().padStart(2, '0') + value
+  function tlv(id: string, val: string): string {
+    return id + val.length.toString().padStart(2, '0') + val
   }
+
+  // Build Merchant Account Info (field 26) with nested subfields
+  const gui = tlv('00', 'BR.GOV.BCB.PIX')
+  const pixKeyValue = tlv('01', key)
+  const field26 = tlv('26', gui + pixKeyValue)
 
   let payload = ''
   payload += tlv('00', '01')
   payload += tlv('01', '12')
-  payload += tlv('00', 'BR.GOV.BCB.PIX')
-  payload += tlv('01', key)
-
+  payload += field26
   payload += tlv('52', '0000')
   payload += tlv('53', '986')
   payload += tlv('54', amountStr)
   payload += tlv('58', 'BR')
   payload += tlv('59', merchantName)
   payload += tlv('60', merchantCity)
-  payload += tlv('62', '0503***')
+  payload += tlv('62', tlv('05', '***'))
   payload += '6304'
 
   const crc = calculateCRC16(payload)
