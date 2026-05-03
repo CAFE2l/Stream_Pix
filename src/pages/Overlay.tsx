@@ -29,10 +29,12 @@ export default function Overlay() {
   const queueRef = useRef<(DonationEvent & { id: string })[]>([])
   const processingRef = useRef(false)
   const completedRef = useRef(false)
+  const finishingRef = useRef(false)
   const seenIdsRef = useRef<Set<string>>(new Set())
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
-  const textTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const enableSound = useCallback(() => {
     setSoundEnabled(true)
@@ -47,7 +49,23 @@ export default function Overlay() {
     setVideoSoundLocked(false)
   }, [])
 
+  const clearAllTimers = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+    if (fallbackTimerRef.current) {
+      clearTimeout(fallbackTimerRef.current)
+      fallbackTimerRef.current = null
+    }
+  }, [])
+
   const completeDonation = useCallback(async (donation: DonationEvent & { id: string }) => {
+    if (finishingRef.current) return
+    finishingRef.current = true
+
+    clearAllTimers()
+
     if (!userId) return
     try {
       await updateDoc(doc(db, 'users', userId, 'donations', donation.id), { displayed: true })
@@ -58,51 +76,100 @@ export default function Overlay() {
     setActive(null)
     setExiting(false)
     setVideoSoundLocked(false)
-    processQueue()
-  }, [userId])
+    finishingRef.current = false
+
+    setTimeout(() => processQueue(), 100)
+  }, [userId, clearAllTimers])
+
+  const handleMediaEnd = useCallback(() => {
+    if (completedRef.current || !active) return
+    completedRef.current = true
+    setExiting(true)
+    completeDonation(active)
+  }, [active, completeDonation])
 
   const processQueue = useCallback(() => {
     if (processingRef.current || queueRef.current.length === 0) return
     processingRef.current = true
     completedRef.current = false
+    finishingRef.current = false
 
     const next = queueRef.current.shift()!
     setActive(next)
     setExiting(false)
     setVideoSoundLocked(false)
 
+    const duration = (settings?.duration ?? DEFAULT_DURATION) * 1000
+
     if (next.type === 'text') {
-      const duration = (settings?.duration ?? DEFAULT_DURATION) * 1000
-      textTimerRef.current = setTimeout(() => {
+      timerRef.current = setTimeout(() => {
         if (completedRef.current) return
         completedRef.current = true
         setExiting(true)
-        setTimeout(() => completeDonation(next), 500)
+        completeDonation(next)
       }, duration)
+    } else if (next.type === 'audio') {
+      if (!next.audioUrl) {
+        timerRef.current = setTimeout(() => {
+          if (completedRef.current) return
+          completedRef.current = true
+          setExiting(true)
+          completeDonation(next)
+        }, duration)
+      } else {
+        fallbackTimerRef.current = setTimeout(() => {
+          if (completedRef.current) return
+          console.warn('Fallback: áudio demorou demais, finalizando')
+          completedRef.current = true
+          setExiting(true)
+          completeDonation(next)
+        }, 120000)
+      }
+    } else if (next.type === 'video') {
+      if (!next.videoUrl) {
+        timerRef.current = setTimeout(() => {
+          if (completedRef.current) return
+          completedRef.current = true
+          setExiting(true)
+          completeDonation(next)
+        }, duration)
+      } else {
+        fallbackTimerRef.current = setTimeout(() => {
+          if (completedRef.current) return
+          console.warn('Fallback: vídeo demorou demais, finalizando')
+          completedRef.current = true
+          setExiting(true)
+          completeDonation(next)
+        }, 300000)
+      }
     }
   }, [settings?.duration, completeDonation])
 
-  const handleMediaEnd = useCallback(() => {
-    if (completedRef.current || !active) return
-    completedRef.current = true
-    setExiting(true)
-    setTimeout(() => completeDonation(active), 500)
-  }, [active, completeDonation])
-
   useEffect(() => {
-    if (active?.type === 'video' && videoRef.current) {
+    finishingRef.current = false
+    completedRef.current = false
+    clearAllTimers()
+
+    if (active?.type === 'audio' && audioRef.current && active.audioUrl) {
+      audioRef.current.src = active.audioUrl
+      audioRef.current.muted = false
+      audioRef.current.volume = 1
+      audioRef.current.play()
+        .then(() => setVideoSoundLocked(false))
+        .catch(() => {
+          console.warn('Autoplay áudio bloqueado, aguardando interação')
+        })
+    }
+
+    if (active?.type === 'video' && videoRef.current && active.videoUrl) {
+      videoRef.current.src = active.videoUrl
       videoRef.current.muted = false
       videoRef.current.volume = 1
       videoRef.current.play()
         .then(() => setVideoSoundLocked(false))
         .catch(() => setVideoSoundLocked(true))
     }
-    if (active?.type === 'audio' && audioRef.current) {
-      audioRef.current.muted = false
-      audioRef.current.volume = 1
-      audioRef.current.play().catch(() => {})
-    }
-  }, [active])
+  }, [active?.id, clearAllTimers])
 
   useEffect(() => {
     if (!active || !soundEnabled) return
@@ -162,11 +229,8 @@ export default function Overlay() {
   }, [userId, processQueue])
 
   useEffect(() => {
-    if (active?.type !== 'text' && textTimerRef.current) {
-      clearTimeout(textTimerRef.current)
-      textTimerRef.current = null
-    }
-  }, [active])
+    return () => clearAllTimers()
+  }, [clearAllTimers])
 
   if (!userId || !settings) return null
 
@@ -199,18 +263,22 @@ export default function Overlay() {
         ref={audioRef}
         preload="auto"
         className="hidden"
-        src={active?.type === 'audio' ? active?.audioUrl : undefined}
         onEnded={handleMediaEnd}
-        onError={handleMediaEnd}
+        onError={() => {
+          console.warn('Erro ao carregar áudio do overlay')
+          handleMediaEnd()
+        }}
       />
       <video
         ref={videoRef}
         preload="auto"
         className="hidden"
         playsInline
-        src={active?.type === 'video' ? active?.videoUrl : undefined}
         onEnded={handleMediaEnd}
-        onError={handleMediaEnd}
+        onError={() => {
+          console.warn('Erro ao carregar vídeo do overlay')
+          handleMediaEnd()
+        }}
       />
 
       {active && (
@@ -247,7 +315,10 @@ export default function Overlay() {
                 controls
                 className="w-full max-h-48 object-contain bg-black/50"
                 onEnded={handleMediaEnd}
-                onError={handleMediaEnd}
+                onError={() => {
+                  console.warn('Erro ao reproduir vídeo visível')
+                  handleMediaEnd()
+                }}
               />
             </div>
           )}
@@ -284,7 +355,10 @@ export default function Overlay() {
                     autoPlay
                     className="w-full max-w-xs rounded-lg"
                     onEnded={handleMediaEnd}
-                    onError={handleMediaEnd}
+                    onError={() => {
+                      console.warn('Erro ao reproduzir áudio visível')
+                      handleMediaEnd()
+                    }}
                   />
                 </div>
               )}
