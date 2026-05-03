@@ -8,7 +8,6 @@ import Toast from '../components/ui/Toast'
 import { doc, setDoc, getDoc, collection, addDoc, getDocs, type DocumentSnapshot } from 'firebase/firestore'
 import { db, serverTimestamp } from '../services/firebase'
 import type { UserSettings, DonationEvent, DonationType } from '../types'
-import { MIN_AMOUNTS, DONATION_LABELS } from '../types'
 import { formatCurrency } from '../utils/formatCurrency'
 import QRCode from 'qrcode'
 

@@ -21,7 +21,6 @@ export default function SendDonation() {
   const [amount, setAmount] = useState('')
   const [message, setMessage] = useState('')
   const [mediaBlob, setMediaBlob] = useState<Blob | null>(null)
-  const [mediaPreviewUrl, setMediaPreviewUrl] = useState<string | null>(null)
 
   const [showPayment, setShowPayment] = useState(false)
   const [donationId, setDonationId] = useState<string | null>(null)
@@ -52,7 +51,6 @@ export default function SendDonation() {
   useEffect(() => {
     if (!streamerId || !donationId) return
 
-    const unsub = db.collection?.('users')
     const docRef = doc(db, 'users', streamerId, 'donations', donationId)
 
     // For now, poll the document for status changes
@@ -82,14 +80,12 @@ export default function SendDonation() {
     return () => clearInterval(interval)
   }, [streamerId, donationId])
 
-  const handleBlobReady = useCallback((blob: Blob, url: string) => {
+  const handleBlobReady = useCallback((blob: Blob) => {
     setMediaBlob(blob)
-    setMediaPreviewUrl(url)
   }, [])
 
   const handleMediaClear = useCallback(() => {
     setMediaBlob(null)
-    setMediaPreviewUrl(null)
   }, [])
 
   const handleCreateDonation = useCallback(async () => {
@@ -259,7 +255,6 @@ export default function SendDonation() {
                         onClick={() => {
                           setSelectedType(type)
                           setMediaBlob(null)
-                          setMediaPreviewUrl(null)
                           setMessage('')
                         }}
                       />
