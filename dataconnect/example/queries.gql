@@ -1,0 +1,40 @@
+query GetStreamerProfile($streamerId: UUID!) @auth(level: PUBLIC, insecureReason: "This operation is safe to expose to the public as it retrieves public streamer profile data.") {
+  streamer(id: $streamerId) {
+    id
+    username
+    photoUrl
+    description
+    createdAt
+  }
+}
+
+query GetMyOverlaySettings @auth(level: USER) {
+  overlaySettings(where: {streamer: {id_expr: "auth.uid"}}) {
+    id
+    themeName
+    alertSoundUrl
+    backgroundColor
+    textColor
+    font
+    imageUrl
+    minAlertAmount
+  }
+}
+
+mutation CreateDonation($streamerId: UUID!, $amount: Float!, $pixTransactionId: String!, $donorName: String, $message: String) @auth(level: PUBLIC, insecureReason: "This operation is safe to expose to the public as it handles donations from any user.") {
+  donation_insert(data: {
+    streamerId: $streamerId,
+    amount: $amount,
+    createdAt_expr: "request.time",
+    pixTransactionId: $pixTransactionId,
+    donorName: $donorName,
+    message: $message
+  })
+}
+
+mutation UpdateStreamerDescription($newDescription: String!) @auth(level: USER) {
+  streamer_update(
+    key: {id_expr: "auth.uid"},
+    data: {description: $newDescription}
+  )
+}

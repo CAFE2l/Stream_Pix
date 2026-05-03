@@ -1,0 +1,71 @@
+mutation CreateSeedData @transaction @auth(level: PUBLIC, insecureReason: "This is seed data and should be accessible during development.") {
+  # Streamer Data
+  streamer1: streamer_insert(data: {
+    id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+    username: "gaming_guru",
+    email: "gaming.guru@example.com",
+    pixKey: "pixkey123",
+    createdAt_expr: "request.time",
+    photoUrl: "https://example.com/gaming_guru.png",
+    description: "Playing the latest and greatest games!"
+  })
+  streamer2: streamer_insert(data: {
+    id: "b1f0d1a2-c3e4-5f67-890a-123b4c5d6e7f",
+    username: "art_streamer",
+    email: "art.streamer@example.com",
+    pixKey: "pixkey456",
+    createdAt_expr: "request.time",
+    photoUrl: "https://example.com/art_streamer.png",
+    description: "Creative coding and digital art streams."
+  })
+
+  # Overlay Setting Data for streamer1
+  overlaySetting1: overlaySetting_insert(data: {
+    streamerId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+    themeName: "Neon Dream",
+    alertSoundUrl: "https://example.com/neon_alert.mp3",
+    backgroundColor: "#000000",
+    textColor: "#00ffff",
+    font: "Space Mono",
+    imageUrl: "https://example.com/neon_overlay.png",
+    minAlertAmount: 5.0
+  })
+
+  # Stream Session Data for streamer1
+  session1: streamSession_insert(data: {
+    streamerId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+    startTime_expr: "timestamp('2023-10-27T10:00:00Z')",
+    endTime_expr: "timestamp('2023-10-27T12:00:00Z')",
+    title: "Epic Gaming Marathon!",
+    game: "Cyberpunk 2077"
+  })
+
+  session2: streamSession_insert(data: {
+    streamerId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+    startTime_expr: "timestamp('2023-10-28T18:00:00Z')",
+    title: "Just Chatting & Q&A",
+    game: "Variety"
+  })
+
+  # Donation Data for streamer1, linking to a PixTransaction
+  donation1: donation_insert(data: {
+    id: "c2d3e4f5-g6h7-8i9j-0k1l-2m3n4o5p6q7r",
+    streamerId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+    amount: 10.50,
+    createdAt_expr: "request.time",
+    pixTransactionId: "txid_donation1",
+    donorName: "GenerousViewer",
+    message: "Keep up the great work!"
+  })
+
+  # PixTransaction Data linked to donation1
+  pixTransaction1: pixTransaction_insert(data: {
+    donationId: "c2d3e4f5-g6h7-8i9j-0k1l-2m3n4o5p6q7r",
+    transactionId: "txid_donation1",
+    status: "COMPLETED",
+    value: 10.50,
+    transactionDate_expr: "request.time",
+    payerIdentifier: "viewer@email.com",
+    receiverIdentifier: "gaming_guru@email.com"
+  })
+}

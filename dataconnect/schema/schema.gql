@@ -1,0 +1,46 @@
+type Streamer @table {
+  username: String!
+  email: String!
+  pixKey: String!
+  createdAt: Timestamp!
+  photoUrl: String
+  description: String
+}
+
+type Donation @table {
+  streamer: Streamer!
+  amount: Float!
+  createdAt: Timestamp!
+  pixTransactionId: String!
+  donorName: String
+  message: String
+}
+
+type OverlaySetting @table {
+  streamer: Streamer!
+  themeName: String!
+  alertSoundUrl: String!
+  backgroundColor: String
+  textColor: String
+  font: String
+  imageUrl: String
+  minAlertAmount: Float
+}
+
+type PixTransaction @table {
+  donation: Donation
+  transactionId: String!
+  status: String!
+  value: Float!
+  transactionDate: Timestamp!
+  payerIdentifier: String
+  receiverIdentifier: String
+}
+
+type StreamSession @table {
+  streamer: Streamer!
+  startTime: Timestamp!
+  endTime: Timestamp
+  title: String
+  game: String
+}
