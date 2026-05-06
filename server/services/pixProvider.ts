@@ -92,59 +92,54 @@ class MockPixProvider implements PixProvider {
   }
 }
 
-class MercadoPagoPixProvider implements PixProvider {
-  private accessToken: string
-  private baseUrl = 'https://api.mercadopago.com'
+class OpenPixProvider implements PixProvider {
+  private appID: string
+  private baseUrl = 'https://api.openpix.com.br/api/v1'
 
   constructor() {
-    this.accessToken = process.env.MERCADO_PAGO_ACCESS_TOKEN || ''
+    this.appID = process.env.OPENPIX_APP_ID || ''
   }
 
   private getHeaders(): Record<string, string> {
     return {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${this.accessToken}`,
-      'X-Idempotency-Key': `sp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      'Authorization': this.appID,
     }
   }
 
   async createCharge(input: CreatePixChargeInput): Promise<CreatePixChargeOutput> {
-    if (!this.accessToken) {
-      throw new Error('Mercado Pago não configurado. Adicione MERCADO_PAGO_ACCESS_TOKEN no .env')
+    if (!this.appID) {
+      throw new Error('OpenPix não configurado. Adicione OPENPIX_APP_ID no .env')
     }
 
-    const paymentData = {
-      transaction_amount: input.amount,
-      description: input.description || `Doação Stream Pix`,
-      payment_method_id: 'pix',
-      payer: {
-        email: input.payerEmail || 'donor@streampix.com',
-        first_name: input.payerName || 'Doador',
-      },
-      external_reference: input.txid,
-      notification_url: `${process.env.FRONTEND_URL || 'http://localhost:3001'}/api/pix/webhook`,
+    const chargeData = {
+      value: Math.round(input.amount * 100),
+      correlationID: input.txid,
+      comment: input.description || `Doação Stream Pix - ${input.payerName}`,
     }
 
-    const response = await fetch(`${this.baseUrl}/v1/payments`, {
+    const response = await fetch(`${this.baseUrl}/charge`, {
       method: 'POST',
       headers: this.getHeaders(),
-      body: JSON.stringify(paymentData),
+      body: JSON.stringify(chargeData),
     })
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({}))
-      console.error('[MercadoPago] Failed to create payment:', error)
-      throw new Error(error.message || `Mercado Pago API error: ${response.status}`)
+      console.error('[OpenPix] Failed to create charge:', error)
+      throw new Error(error.message || `OpenPix API error: ${response.status}`)
     }
 
     const data = await response.json()
 
-    const qrCode = data.point_of_interaction?.transaction_data?.qr_code || ''
-    const pixCopiaECola = data.point_of_interaction?.transaction_data?.qr_code || ''
-    const paymentId = String(data.id)
+    const charge = data.charge || data
 
-    if (!paymentId || !qrCode) {
-      throw new Error('Mercado Pago não retornou dados do Pix')
+    const pixCopiaECola = charge.brCode || ''
+    const qrCode = charge.qrCodeImage || charge.brCode || ''
+    const paymentId = charge.identifier || charge.globalID || charge.correlationID
+
+    if (!paymentId || !pixCopiaECola) {
+      throw new Error('OpenPix não retornou dados do Pix')
     }
 
     return {
@@ -152,37 +147,38 @@ class MercadoPagoPixProvider implements PixProvider {
       paymentId,
       qrCode,
       pixCopiaECola,
-      expiresIn: 1800,
+      expiresIn: charge.expiresIn || 1800,
     }
   }
 
-  async verifyPayment(paymentId: string): Promise<{
+  async verifyPayment(correlationID: string): Promise<{
     status: string
     amount: number
-    externalReference: string
-    endToEndId?: string
+    value?: number
   } | null> {
-    if (!this.accessToken) {
-      throw new Error('Mercado Pago não configurado')
+    if (!this.appID) {
+      throw new Error('OpenPix não configurado')
     }
 
-    const response = await fetch(`${this.baseUrl}/v1/payments/${paymentId}`, {
+    const response = await fetch(`${this.baseUrl}/charge?correlationID=${correlationID}`, {
       method: 'GET',
       headers: this.getHeaders(),
     })
 
     if (!response.ok) {
-      console.error(`[MercadoPago] Failed to fetch payment ${paymentId}:`, response.status)
+      console.error(`[OpenPix] Failed to fetch charge ${correlationID}:`, response.status)
       return null
     }
 
     const data = await response.json()
+    const charge = data.charge || (Array.isArray(data.charges) ? data.charges[0] : null)
+
+    if (!charge) return null
 
     return {
-      status: data.status,
-      amount: data.transaction_amount,
-      externalReference: data.external_reference,
-      endToEndId: data.point_of_interaction?.transaction_data?.end_to_end_id,
+      status: charge.status,
+      amount: (charge.value || 0) / 100,
+      value: charge.value,
     }
   }
 
@@ -192,21 +188,32 @@ class MercadoPagoPixProvider implements PixProvider {
   ): Promise<WebhookVerificationResult> {
     const data = payload as Record<string, unknown>
 
-    if (data.type === 'payment' && data.data?.id) {
-      const paymentId = String(data.data.id)
-      const payment = await this.verifyPayment(paymentId)
+    const event = data.event as string | undefined
+    const chargeData = data.charge as Record<string, unknown> | undefined
 
-      if (!payment) {
-        return { valid: false }
+    if (event === 'pix:payment' && chargeData) {
+      const status = chargeData.status as string
+      const correlationID = chargeData.correlationID as string
+      const value = Number(chargeData.value || 0) / 100
+
+      if (status === 'COMPLETED' || status === 'PAID') {
+        return {
+          valid: true,
+          paymentId: chargeData.identifier as string,
+          txid: correlationID,
+          status: 'approved',
+          amount: value,
+        }
       }
 
-      return {
-        valid: true,
-        paymentId,
-        txid: payment.externalReference,
-        status: payment.status,
-        amount: payment.amount,
-        endToEndId: payment.endToEndId,
+      if (status === 'EXPIRED') {
+        return {
+          valid: true,
+          paymentId: chargeData.identifier as string,
+          txid: correlationID,
+          status: 'expired',
+          amount: value,
+        }
       }
     }
 
@@ -217,13 +224,18 @@ class MercadoPagoPixProvider implements PixProvider {
 function createProvider(): PixProvider {
   const provider = process.env.PIX_PROVIDER || 'mock'
 
-  if (provider === 'mercadopago') {
-    if (!process.env.MERCADO_PAGO_ACCESS_TOKEN) {
-      console.error('[PixProvider] Mercado Pago selected but MERCADO_PAGO_ACCESS_TOKEN not set')
-      throw new Error('PIX_PROVIDER=mercadopago requires MERCADO_PAGO_ACCESS_TOKEN')
+  if (provider === 'openpix') {
+    if (!process.env.OPENPIX_APP_ID) {
+      console.error('[PixProvider] OpenPix selected but OPENPIX_APP_ID not set')
+      throw new Error('PIX_PROVIDER=openpix requires OPENPIX_APP_ID')
     }
-    console.log('[PixProvider] Using Mercado Pago provider')
-    return new MercadoPagoPixProvider()
+    console.log('[PixProvider] Using OpenPix provider')
+    return new OpenPixProvider()
+  }
+
+  if (provider === 'mercadopago') {
+    console.warn('[PixProvider] Mercado Pago provider removed. Use PIX_PROVIDER=openpix instead')
+    throw new Error('Mercado Pago provider is no longer available. Use OpenPix (PIX_PROVIDER=openpix)')
   }
 
   if (provider === 'mock') {
