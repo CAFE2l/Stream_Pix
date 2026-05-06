@@ -3,8 +3,9 @@ import { useEffect, useState, useCallback } from 'react'
 import { formatCurrency } from '../../utils/formatCurrency'
 
 type PixPaymentProps = {
-  pixKey: string
+  pixKey?: string
   amount: number
+  pixCopiaECola?: string
   onCopy?: () => void
 }
 
@@ -17,7 +18,6 @@ export function generateStaticPix(key: string, value: number): string {
     return id + val.length.toString().padStart(2, '0') + val
   }
 
-  // Build Merchant Account Info (field 26) with nested subfields
   const gui = tlv('00', 'BR.GOV.BCB.PIX')
   const pixKeyValue = tlv('01', key)
   const field26 = tlv('26', gui + pixKeyValue)
@@ -53,14 +53,14 @@ export function calculateCRC16(payload: string): string {
   return crc.toString(16).toUpperCase().padStart(4, '0')
 }
 
-export default function PixPayment({ pixKey, amount, onCopy }: PixPaymentProps) {
+export default function PixPayment({ pixKey, amount, pixCopiaECola, onCopy }: PixPaymentProps) {
   const [qrDataUrl, setQrDataUrl] = useState('')
   const [copied, setCopied] = useState(false)
 
-  const pixPayload = generateStaticPix(pixKey, amount)
+  const pixPayload = pixCopiaECola || (pixKey ? generateStaticPix(pixKey, amount) : '')
 
   useEffect(() => {
-    if (!pixKey || !amount) return
+    if (!pixPayload) return
 
     QRCode.toDataURL(pixPayload, {
       width: 220,
@@ -69,7 +69,7 @@ export default function PixPayment({ pixKey, amount, onCopy }: PixPaymentProps) 
     })
       .then(url => setQrDataUrl(url))
       .catch(() => setQrDataUrl(''))
-  }, [pixKey, amount])
+  }, [pixPayload])
 
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(pixPayload).then(() => {
@@ -78,6 +78,8 @@ export default function PixPayment({ pixKey, amount, onCopy }: PixPaymentProps) 
       onCopy?.()
     })
   }, [pixPayload, onCopy])
+
+  if (!pixPayload) return null
 
   return (
     <div className="flex flex-col items-center gap-4">

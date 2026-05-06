@@ -25,9 +25,15 @@ export default function SimulatePix() {
       await addDoc(col, {
         donorName: name || 'Anônimo',
         amount: parseFloat(amount) || 0,
+        type: 'text',
         message,
+        status: 'paid',
+        isTest: true,
         createdAt: serverTimestamp(),
         displayed: false,
+        txid: `test_${Date.now()}`,
+        donationId: crypto.randomUUID(),
+        streamerId: userId,
       })
       setName('')
       setAmount('')

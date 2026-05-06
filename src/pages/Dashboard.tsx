@@ -44,7 +44,7 @@ export default function Dashboard() {
       let count = 0
       snaps.forEach((d: DocumentSnapshot) => {
         const data = d.data() as DonationEvent
-        if (data.isTest !== true && data.paymentStatus === 'paid') {
+        if (data.isTest !== true && data.status === 'paid') {
           t += data.amount || 0
           count++
         }
@@ -119,7 +119,7 @@ export default function Dashboard() {
         amount,
         type,
         message: 'Teste rápido do overlay',
-        paymentStatus: 'paid',
+        status: 'paid',
         isTest: true,
         createdAt: serverTimestamp(),
         displayed: false,

@@ -1,7 +1,7 @@
 import type { Timestamp } from 'firebase/firestore'
 
 export type DonationType = 'text' | 'audio' | 'video'
-export type PaymentStatus = 'pending' | 'paid' | 'expired' | 'failed'
+export type PaymentStatus = 'pending' | 'paid' | 'expired' | 'failed' | 'played'
 
 export type UserSettings = {
   streamerName: string
@@ -13,16 +13,23 @@ export type UserSettings = {
 }
 
 export type DonationEvent = {
+  id?: string
   donorName: string
   amount: number
   type: DonationType
   message?: string
   audioUrl?: string
   videoUrl?: string
-  paymentStatus: PaymentStatus
-  createdAt?: Timestamp
+  status: PaymentStatus
+  createdAt?: Timestamp | string
+  paidAt?: Timestamp | string
   displayed?: boolean
   isTest?: boolean
+  txid?: string
+  donationId?: string
+  streamerId?: string
+  endToEndId?: string
+  failureReason?: string
 }
 
 export const MIN_AMOUNTS: Record<DonationType, number> = {

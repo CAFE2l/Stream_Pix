@@ -199,7 +199,7 @@ export default function Overlay() {
     })
 
     const donationsCol = collection(db, 'users', userId, 'donations')
-    const q = query(donationsCol, where('paymentStatus', '==', 'paid'), where('displayed', '==', false), orderBy('createdAt', 'asc'))
+    const q = query(donationsCol, where('status', '==', 'paid'), where('displayed', '==', false), orderBy('createdAt', 'asc'))
     const unsub = onSnapshot(q, (snapshot: QuerySnapshot<DocumentData>) => {
       if (snapshot.empty) return
 
@@ -208,8 +208,11 @@ export default function Overlay() {
 
       let hasNew = false
       for (const docSnap of snapshot.docs) {
-        if (!seenIdsRef.current.has(docSnap.id) && !existingIds.has(docSnap.id)) {
-          const data = { id: docSnap.id, ...docSnap.data() } as DonationEvent & { id: string }
+        const data = { id: docSnap.id, ...docSnap.data() } as DonationEvent & { id: string }
+        const showTest = data.isTest === true
+        const showReal = data.isTest !== true
+
+        if ((showTest || showReal) && !seenIdsRef.current.has(docSnap.id) && !existingIds.has(docSnap.id)) {
           queueRef.current.push(data)
           seenIdsRef.current.add(docSnap.id)
           hasNew = true

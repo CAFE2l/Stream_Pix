@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams } from 'react-router-dom'
-import { doc, getDoc, collection, addDoc, serverTimestamp } from 'firebase/firestore'
+import { doc, getDoc, onSnapshot } from 'firebase/firestore'
 import { db } from '../services/firebase'
 import { uploadToCloudinary } from '../services/cloudinary'
 import type { UserSettings, DonationType, PaymentStatus } from '../types'
@@ -10,9 +10,14 @@ import DonationTypeCard from '../components/send/DonationTypeCard'
 import MediaRecorderComponent from '../components/send/MediaRecorder'
 import PixPayment from '../components/send/PixPayment'
 import Input from '../components/ui/Input'
+import useAuth from '../hooks/useAuth'
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+const ENABLE_MANUAL_CONFIRM = import.meta.env.VITE_ENABLE_MANUAL_CONFIRM === 'true'
 
 export default function SendDonation() {
   const { streamerId } = useParams<{ streamerId: string }>()
+  const { user } = useAuth()
   const [settings, setSettings] = useState<UserSettings | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -24,10 +29,18 @@ export default function SendDonation() {
 
   const [showPayment, setShowPayment] = useState(false)
   const [donationId, setDonationId] = useState<string | null>(null)
-  const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>('pending')
+  const [status, setStatus] = useState<PaymentStatus>('pending')
   const [creatingDonation, setCreatingDonation] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
+
+  const [qrCode, setQrCode] = useState('')
+  const [pixCopiaECola, setPixCopiaECola] = useState('')
+  const [confirmingPayment, setConfirmingPayment] = useState(false)
+
+  const unsubRef = useRef<(() => void) | null>(null)
+
+  const isStreamerOwner = ENABLE_MANUAL_CONFIRM && user && user.uid === streamerId
 
   useEffect(() => {
     if (!streamerId) return
@@ -47,37 +60,34 @@ export default function SendDonation() {
     loadSettings()
   }, [streamerId])
 
-  // Listen for payment status changes on the donation document
   useEffect(() => {
     if (!streamerId || !donationId) return
 
+    if (unsubRef.current) {
+      unsubRef.current()
+    }
+
     const docRef = doc(db, 'users', streamerId, 'donations', donationId)
 
-    // For now, poll the document for status changes
-    // In production, this would be replaced by a real-time webhook or listener
-    const interval = setInterval(async () => {
-      try {
-        const snap = await getDoc(docRef)
-        if (snap.exists()) {
-          const data = snap.data()
-          if (data.paymentStatus === 'paid') {
-            setPaymentStatus('paid')
-            setSuccess(true)
-            clearInterval(interval)
-          } else if (data.paymentStatus === 'expired') {
-            setPaymentStatus('expired')
-            clearInterval(interval)
-          } else if (data.paymentStatus === 'failed') {
-            setPaymentStatus('failed')
-            clearInterval(interval)
-          }
-        }
-      } catch {
-        // silently fail
-      }
-    }, 3000)
+    unsubRef.current = onSnapshot(docRef, (snap) => {
+      if (snap.exists()) {
+        const data = snap.data()
+        setStatus(data.status || 'pending')
 
-    return () => clearInterval(interval)
+        if (data.status === 'paid') {
+          setSuccess(true)
+        }
+      }
+    }, (err) => {
+      console.error('Erro ao ouvir doação:', err)
+    })
+
+    return () => {
+      if (unsubRef.current) {
+        unsubRef.current()
+        unsubRef.current = null
+      }
+    }
   }, [streamerId, donationId])
 
   const handleBlobReady = useCallback((blob: Blob) => {
@@ -87,6 +97,38 @@ export default function SendDonation() {
   const handleMediaClear = useCallback(() => {
     setMediaBlob(null)
   }, [])
+
+  const handleConfirmPayment = useCallback(async () => {
+    if (!streamerId || !donationId) return
+
+    setConfirmingPayment(true)
+    setError(null)
+
+    try {
+      const response = await fetch(`${API_BASE}/api/admin/confirm-payment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          donationId,
+          streamerId,
+          adminToken: import.meta.env.VITE_ADMIN_SECRET || 'dev-secret-token',
+        }),
+      })
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({ error: 'Erro desconhecido' }))
+        throw new Error(errData.error || 'Erro ao confirmar pagamento')
+      }
+
+      // Firestore listener will update status automatically
+    } catch (err) {
+      console.error('Erro ao confirmar pagamento:', err)
+      const msg = err instanceof Error ? err.message : 'Erro desconhecido'
+      setError(`Erro ao confirmar: ${msg}`)
+    } finally {
+      setConfirmingPayment(false)
+    }
+  }, [streamerId, donationId])
 
   const handleCreateDonation = useCallback(async () => {
     if (!streamerId || !selectedType || !settings) return
@@ -115,47 +157,69 @@ export default function SendDonation() {
     setCreatingDonation(true)
 
     try {
-      let audioUrl: string | null = null
-      let videoUrl: string | null = null
+      let mediaUrl: string | null = null
 
       if (selectedType === 'audio' && mediaBlob) {
         const file = new File([mediaBlob], `audio-${Date.now()}.webm`, {
           type: mediaBlob.type || 'audio/webm',
         })
-        audioUrl = await uploadToCloudinary(file)
+        mediaUrl = await uploadToCloudinary(file)
       }
 
       if (selectedType === 'video' && mediaBlob) {
         const file = new File([mediaBlob], `video-${Date.now()}.webm`, {
           type: mediaBlob.type || 'video/webm',
         })
-        videoUrl = await uploadToCloudinary(file)
+        mediaUrl = await uploadToCloudinary(file)
       }
 
-      const donationsCol = collection(db, 'users', streamerId, 'donations')
-      const docRef = await addDoc(donationsCol, {
-        donorName: donorName.trim(),
-        amount: parsedAmount,
-        type: selectedType,
-        message: selectedType === 'text' ? message.trim() : '',
-        audioUrl,
-        videoUrl,
-        paymentStatus: 'pending',
-        displayed: false,
-        createdAt: serverTimestamp(),
+      const response = await fetch(`${API_BASE}/api/pix/create-charge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          streamerId,
+          amount: parsedAmount,
+          type: selectedType,
+          name: donorName.trim(),
+          message: selectedType === 'text' ? message.trim() : '',
+          mediaUrl,
+          mediaType: selectedType !== 'text' ? selectedType : undefined,
+        }),
       })
 
-      setDonationId(docRef.id)
-      setPaymentStatus('pending')
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({ error: 'Erro desconhecido' }))
+        throw new Error(errData.error || 'Erro ao criar cobrança')
+      }
+
+      const data = await response.json()
+
+      setDonationId(data.donationId)
+      setQrCode(data.qrCode)
+      setPixCopiaECola(data.pixCopiaECola)
+      setStatus(data.status)
       setShowPayment(true)
     } catch (err) {
       console.error('Erro ao criar doação:', err)
-      const msg = err instanceof Error ? err.message : 'Erro desconhecido'
-      setError(`Erro ao criar doação: ${msg}`)
+      if (err instanceof TypeError && err.message.includes('fetch')) {
+        setError('Servidor de pagamento offline. Rode `npm run dev:server` para iniciar o backend.')
+      } else if (err instanceof Error) {
+        setError(`Não foi possível criar a cobrança Pix: ${err.message}`)
+      } else {
+        setError('Não foi possível criar a cobrança Pix. Verifique a configuração do backend.')
+      }
     } finally {
       setCreatingDonation(false)
     }
   }, [streamerId, selectedType, settings, donorName, amount, message, mediaBlob])
+
+  useEffect(() => {
+    return () => {
+      if (unsubRef.current) {
+        unsubRef.current()
+      }
+    }
+  }, [])
 
   if (loading) {
     return (
@@ -204,12 +268,10 @@ export default function SendDonation() {
 
   return (
     <div className="min-h-screen bg-bg">
-      {/* Background */}
       <div className="fixed inset-0 bg-gradient opacity-50" />
       <div className="fixed inset-0 bg-grid-fine opacity-30" />
 
       <div className="relative z-10 min-h-screen flex flex-col">
-        {/* Header */}
         <header className="px-4 py-5 border-b border-border/50">
           <div className="max-w-lg mx-auto flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-neon/20 to-cyan/20 flex items-center justify-center overflow-hidden">
@@ -222,12 +284,10 @@ export default function SendDonation() {
           </div>
         </header>
 
-        {/* Content */}
         <main className="flex-1 px-4 py-6">
           <div className="max-w-lg mx-auto space-y-6">
             {!showPayment && (
               <>
-                {/* Type selection */}
                 <div>
                   <h2 className="text-sm font-semibold text-sage mb-3 uppercase tracking-wider">Escolha o tipo</h2>
                   <div className="space-y-2">
@@ -262,7 +322,6 @@ export default function SendDonation() {
                   </div>
                 </div>
 
-                {/* Form */}
                 {selectedType && (
                   <div className="space-y-4">
                     <div>
@@ -339,13 +398,14 @@ export default function SendDonation() {
               </>
             )}
 
-            {/* Payment screen */}
             {showPayment && (
               <div className="space-y-6">
                 <button
                   onClick={() => {
                     setShowPayment(false)
                     setDonationId(null)
+                    setQrCode('')
+                    setPixCopiaECola('')
                   }}
                   className="flex items-center gap-2 text-sm text-sage hover:text-offwhite transition-colors"
                 >
@@ -361,7 +421,12 @@ export default function SendDonation() {
                     <p className="text-sm text-sage mt-1">Escaneie o QR Code ou copie a chave</p>
                   </div>
 
-                  <PixPayment pixKey={settings.pixKey} amount={parseFloat(amount)} />
+                  {qrCode && (
+                    <PixPayment
+                      pixCopiaECola={pixCopiaECola}
+                      amount={parseFloat(amount)}
+                    />
+                  )}
 
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
@@ -380,19 +445,40 @@ export default function SendDonation() {
                     )}
                   </div>
 
-                  {/* Waiting status */}
                   <div className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-neon/5 border border-neon/15">
                     <span className="w-2 h-2 rounded-full bg-neon animate-pulse" />
                     <span className="text-sm text-sage">Aguardando confirmação do pagamento...</span>
                   </div>
 
-                  {paymentStatus === 'expired' && (
+                  {isStreamerOwner && status === 'pending' && (
+                    <div className="space-y-2">
+                      <div className="px-3.5 py-2 rounded-xl border border-amber-500/20 bg-amber-500/5 text-amber-400 text-xs text-center">
+                        Modo desenvolvedor — confirmação manual disponível
+                      </div>
+                      <button
+                        onClick={handleConfirmPayment}
+                        disabled={confirmingPayment}
+                        className="w-full py-2.5 rounded-xl bg-amber-500/10 text-amber-400 text-sm font-medium border border-amber-500/20 hover:bg-amber-500/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        {confirmingPayment ? (
+                          <span className="flex items-center justify-center gap-2">
+                            <span className="w-4 h-4 border-2 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" />
+                            Confirmando...
+                          </span>
+                        ) : (
+                          'Confirmar pagamento manualmente'
+                        )}
+                      </button>
+                    </div>
+                  )}
+
+                  {status === 'expired' && (
                     <div className="px-3.5 py-3 rounded-xl border border-red-500/20 bg-red-500/5 text-red-400 text-sm text-center">
                       Pagamento expirado. Tente novamente.
                     </div>
                   )}
 
-                  {paymentStatus === 'failed' && (
+                  {status === 'failed' && (
                     <div className="px-3.5 py-3 rounded-xl border border-red-500/20 bg-red-500/5 text-red-400 text-sm text-center">
                       Pagamento não confirmado. Tente novamente.
                     </div>

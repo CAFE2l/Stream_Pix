@@ -19,4 +19,16 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    files: ['server/**/*.{ts,tsx}'],
+    languageOptions: {
+      globals: globals.node,
+    },
+    rules: {
+      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
+      'react-refresh/only-export-components': 'off',
+      'react-hooks/rules-of-hooks': 'off',
+      'react-hooks/exhaustive-deps': 'off',
+    },
+  },
 ])
