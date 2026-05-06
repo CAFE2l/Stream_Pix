@@ -35,6 +35,7 @@ export default function Overlay() {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const playedAudioRef = useRef<string | null>(null)
 
   const enableSound = useCallback(() => {
     setSoundEnabled(true)
@@ -60,6 +61,8 @@ export default function Overlay() {
     }
   }, [])
 
+  const processQueueRef = useRef<(() => void) | null>(null)
+
   const completeDonation = useCallback(async (donation: DonationEvent & { id: string }) => {
     if (finishingRef.current) return
     finishingRef.current = true
@@ -77,8 +80,11 @@ export default function Overlay() {
     setExiting(false)
     setVideoSoundLocked(false)
     finishingRef.current = false
+    playedAudioRef.current = null
 
-    setTimeout(() => processQueue(), 100)
+    setTimeout(() => {
+      if (processQueueRef.current) processQueueRef.current()
+    }, 100)
   }, [userId, clearAllTimers])
 
   const handleMediaEnd = useCallback(() => {
@@ -146,10 +152,21 @@ export default function Overlay() {
   }, [settings?.duration, completeDonation])
 
   useEffect(() => {
-    finishingRef.current = false
-    completedRef.current = false
+    processQueueRef.current = processQueue
+  }, [processQueue])
 
+  useEffect(() => {
+    if (!active) return
+    playedAudioRef.current = null
+    completedRef.current = false
+    finishingRef.current = false
+  }, [active?.id])
+
+  useEffect(() => {
     if (active?.type === 'audio' && audioRef.current && active.audioUrl) {
+      if (playedAudioRef.current === active.id) return
+      playedAudioRef.current = active.id
+
       audioRef.current.src = active.audioUrl
       audioRef.current.muted = false
       audioRef.current.volume = 1
@@ -209,10 +226,7 @@ export default function Overlay() {
       let hasNew = false
       for (const docSnap of snapshot.docs) {
         const data = { id: docSnap.id, ...docSnap.data() } as DonationEvent & { id: string }
-        const showTest = data.isTest === true
-        const showReal = data.isTest !== true
-
-        if ((showTest || showReal) && !seenIdsRef.current.has(docSnap.id) && !existingIds.has(docSnap.id)) {
+        if (!seenIdsRef.current.has(docSnap.id) && !existingIds.has(docSnap.id)) {
           queueRef.current.push(data)
           seenIdsRef.current.add(docSnap.id)
           hasNew = true
@@ -318,7 +332,7 @@ export default function Overlay() {
                 className="w-full max-h-48 object-contain bg-black/50"
                 onEnded={handleMediaEnd}
                 onError={() => {
-                  console.warn('Erro ao reproduir vídeo visível')
+                  console.warn('Erro ao reproduzir vídeo visível')
                   handleMediaEnd()
                 }}
               />
@@ -346,22 +360,6 @@ export default function Overlay() {
               {active.type === 'text' && active.message && (
                 <div className="text-sage text-base mt-2 break-words" title={active.message}>
                   &ldquo;{active.message}&rdquo;
-                </div>
-              )}
-
-              {active.type === 'audio' && active.audioUrl && (
-                <div className="mt-3">
-                  <audio
-                    src={active.audioUrl}
-                    controls
-                    autoPlay
-                    className="w-full max-w-xs rounded-lg"
-                    onEnded={handleMediaEnd}
-                    onError={() => {
-                      console.warn('Erro ao reproduzir áudio visível')
-                      handleMediaEnd()
-                    }}
-                  />
                 </div>
               )}
 
