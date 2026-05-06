@@ -1,11 +1,17 @@
 import "dotenv/config";
-import express, { Request, Response } from "express";
+import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import pixRoutes from "./routes/pix.js";
 import { adminDb, isConfigured } from "./services/firebaseAdmin.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+function logDev(...args: unknown[]) {
+  if (process.env.NODE_ENV !== "production") {
+    console.log("[Server]", ...args);
+  }
+}
 
 app.use(
   cors({
@@ -17,13 +23,40 @@ app.use(
     ].filter(Boolean) as string[],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
-  }),
+  })
 );
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
+
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+function rateLimit(windowMs = 60000, maxRequests = 10) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const ip = req.ip || req.connection.remoteAddress || "unknown";
+    const now = Date.now();
+    const entry = rateLimitMap.get(ip);
+
+    if (!entry || now > entry.resetAt) {
+      rateLimitMap.set(ip, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+
+    if (entry.count >= maxRequests) {
+      return res.status(429).json({
+        error: "Muitas requisições. Tente novamente em breve.",
+        retryAfter: Math.ceil((entry.resetAt - now) / 1000),
+      });
+    }
+
+    entry.count++;
+    next();
+  };
+}
+
+app.use("/api/pix", rateLimit(60000, 20));
 
 if (!isConfigured) {
   console.warn(
-    "[Server] Firebase Admin não configurado — requisições ao /api/pix retornarão 503",
+    "[Server] Firebase Admin não configurado — requisições ao /api/pix retornarão 503"
   );
 }
 
@@ -74,24 +107,26 @@ app.post(
         isTest: true,
       });
 
-      console.log(`[DEV] Donation ${donationId} marked as paid`);
+      logDev(`Donation ${donationId} marked as paid (DEV mode)`);
       return res.json({ status: "confirmed" });
     } catch (error) {
       console.error("[dev/confirm-payment] Error:", error);
       return res.status(500).json({ error: "Erro ao confirmar pagamento" });
     }
-  },
+  }
 );
 
 app.post("/api/admin/confirm-payment", async (req: Request, res: Response) => {
   if (!isConfigured) {
-    return res
-      .status(503)
-      .json({ error: "Firebase Admin não configurado no backend" });
+    return res.status(503).json({ error: "Firebase Admin não configurado no backend" });
   }
 
   try {
     const { donationId, streamerId, adminToken } = req.body;
+
+    if (!donationId || !streamerId) {
+      return res.status(400).json({ error: "donationId e streamerId são obrigatórios" });
+    }
 
     if (adminToken !== process.env.ADMIN_SECRET) {
       return res.status(401).json({ error: "Não autorizado" });
@@ -119,6 +154,7 @@ app.post("/api/admin/confirm-payment", async (req: Request, res: Response) => {
       isTest: true,
     });
 
+    logDev(`Donation ${donationId} marked as paid (admin)`);
     return res.json({ status: "confirmed" });
   } catch (error) {
     console.error("[admin/confirm-payment] Error:", error);

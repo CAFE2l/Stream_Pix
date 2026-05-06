@@ -3,13 +3,14 @@ import { useParams } from 'react-router-dom'
 import { db } from '../services/firebase'
 import { collection, query, where, orderBy, onSnapshot, updateDoc, doc, type QuerySnapshot, type DocumentData } from 'firebase/firestore'
 import type { DonationEvent, UserSettings } from '../types'
+import { THEMES as THEME_CONFIG } from '../types'
 import { formatCurrency } from '../utils/formatCurrency'
 import { getDonationSound } from '../utils/getDonationSound'
+import { devLog, devWarn, devError } from '../utils/devLogger'
 import moedaGif from '../assets/images/gifs/moeda_mario.gif'
 import dinheiroAsaGif from '../assets/images/gifs/cash.gif'
 import montanteGif from '../assets/images/gifs/montante.gif'
 
-const DEFAULT_COLOR = '#00FF88'
 const DEFAULT_DURATION = 5
 
 function getDonationGif(amount: number) {
@@ -21,10 +22,10 @@ function getDonationGif(amount: number) {
 export default function Overlay() {
   const { userId } = useParams<{ userId: string }>()
   const [active, setActive] = useState<(DonationEvent & { id: string }) | null>(null)
-  const [exiting, setExiting] = useState(false)
   const [settings, setSettings] = useState<UserSettings | null>(null)
   const [soundEnabled, setSoundEnabled] = useState(false)
   const [videoSoundLocked, setVideoSoundLocked] = useState(false)
+  const [progress, setProgress] = useState(0)
 
   const queueRef = useRef<(DonationEvent & { id: string })[]>([])
   const processingRef = useRef(false)
@@ -36,9 +37,12 @@ export default function Overlay() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const playedAudioRef = useRef<string | null>(null)
+  const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const nextMediaRef = useRef<{ audioUrl?: string; videoUrl?: string } | null>(null)
 
   const enableSound = useCallback(() => {
     setSoundEnabled(true)
+    devLog('overlay', 'Sound enabled by user interaction')
   }, [])
 
   const unlockVideoSound = useCallback(() => {
@@ -59,38 +63,58 @@ export default function Overlay() {
       clearTimeout(fallbackTimerRef.current)
       fallbackTimerRef.current = null
     }
+    if (progressTimerRef.current) {
+      clearInterval(progressTimerRef.current)
+      progressTimerRef.current = null
+    }
   }, [])
 
-  const processQueueRef = useRef<(() => void) | null>(null)
+  const startProgress = useCallback((durationMs: number) => {
+    setProgress(0)
+    if (progressTimerRef.current) clearInterval(progressTimerRef.current)
+
+    const interval = 100
+    const increment = (interval / durationMs) * 100
+
+    progressTimerRef.current = setInterval(() => {
+      setProgress(prev => {
+        const next = prev + increment
+        if (next >= 100) {
+          if (progressTimerRef.current) clearInterval(progressTimerRef.current)
+          return 100
+        }
+        return next
+      })
+    }, interval)
+  }, [])
 
   const completeDonation = useCallback(async (donation: DonationEvent & { id: string }) => {
     if (finishingRef.current) return
     finishingRef.current = true
 
     clearAllTimers()
+    setProgress(0)
 
     if (!userId) return
     try {
-      await updateDoc(doc(db, 'users', userId, 'donations', donation.id), { displayed: true })
-    } catch {
-      // silently fail
+      await updateDoc(doc(db, 'users', userId, 'donations', donation.id), { displayed: true, status: 'played' })
+      devLog('overlay', `Donation ${donation.id} marked as played`)
+    } catch (err) {
+      devError('overlay', 'Failed to update donation', err)
     }
     processingRef.current = false
     setActive(null)
-    setExiting(false)
     setVideoSoundLocked(false)
     finishingRef.current = false
     playedAudioRef.current = null
 
-    setTimeout(() => {
-      if (processQueueRef.current) processQueueRef.current()
-    }, 100)
+    setTimeout(() => processQueueRef.current?.(), 100)
   }, [userId, clearAllTimers])
 
   const handleMediaEnd = useCallback(() => {
     if (completedRef.current || !active) return
     completedRef.current = true
-    setExiting(true)
+    devLog('overlay', `Media ended for donation ${active.id}`)
     completeDonation(active)
   }, [active, completeDonation])
 
@@ -102,54 +126,58 @@ export default function Overlay() {
 
     const next = queueRef.current.shift()!
     setActive(next)
-    setExiting(false)
     setVideoSoundLocked(false)
 
     const duration = (settings?.duration ?? DEFAULT_DURATION) * 1000
 
     if (next.type === 'text') {
+      startProgress(duration)
       timerRef.current = setTimeout(() => {
         if (completedRef.current) return
         completedRef.current = true
-        setExiting(true)
         completeDonation(next)
       }, duration)
     } else if (next.type === 'audio') {
       if (!next.audioUrl) {
+        startProgress(duration)
         timerRef.current = setTimeout(() => {
           if (completedRef.current) return
           completedRef.current = true
-          setExiting(true)
           completeDonation(next)
         }, duration)
       } else {
         fallbackTimerRef.current = setTimeout(() => {
           if (completedRef.current) return
-          console.warn('Fallback: áudio demorou demais, finalizando')
+          devWarn('overlay', 'Fallback: audio took too long')
           completedRef.current = true
-          setExiting(true)
           completeDonation(next)
         }, 120000)
       }
     } else if (next.type === 'video') {
       if (!next.videoUrl) {
+        startProgress(duration)
         timerRef.current = setTimeout(() => {
           if (completedRef.current) return
           completedRef.current = true
-          setExiting(true)
           completeDonation(next)
         }, duration)
       } else {
         fallbackTimerRef.current = setTimeout(() => {
           if (completedRef.current) return
-          console.warn('Fallback: vídeo demorou demais, finalizando')
+          devWarn('overlay', 'Fallback: video took too long')
           completedRef.current = true
-          setExiting(true)
           completeDonation(next)
         }, 300000)
       }
     }
-  }, [settings?.duration, completeDonation])
+
+    if (queueRef.current.length > 0) {
+      const upcoming = queueRef.current[0]
+      nextMediaRef.current = { audioUrl: upcoming.audioUrl, videoUrl: upcoming.videoUrl }
+    }
+  }, [settings?.duration, completeDonation, startProgress])
+
+  const processQueueRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     processQueueRef.current = processQueue
@@ -160,6 +188,7 @@ export default function Overlay() {
     playedAudioRef.current = null
     completedRef.current = false
     finishingRef.current = false
+    devLog('overlay', `Active donation: ${active.id} (${active.type})`)
   }, [active?.id])
 
   useEffect(() => {
@@ -171,9 +200,12 @@ export default function Overlay() {
       audioRef.current.muted = false
       audioRef.current.volume = 1
       audioRef.current.play()
-        .then(() => setVideoSoundLocked(false))
-        .catch(() => {
-          console.warn('Autoplay áudio bloqueado, aguardando interação')
+        .then(() => {
+          setVideoSoundLocked(false)
+          devLog('overlay', 'Audio playback started')
+        })
+        .catch((err) => {
+          devWarn('overlay', 'Audio autoplay blocked', err)
         })
     }
 
@@ -182,8 +214,14 @@ export default function Overlay() {
       videoRef.current.muted = false
       videoRef.current.volume = 1
       videoRef.current.play()
-        .then(() => setVideoSoundLocked(false))
-        .catch(() => setVideoSoundLocked(true))
+        .then(() => {
+          setVideoSoundLocked(false)
+          devLog('overlay', 'Video playback started')
+        })
+        .catch(() => {
+          setVideoSoundLocked(true)
+          devWarn('overlay', 'Video autoplay blocked')
+        })
     }
   }, [active?.id])
 
@@ -196,7 +234,7 @@ export default function Overlay() {
     audio.volume = 1
 
     audio.play().catch((error) => {
-      console.warn('Som do donate bloqueado pelo navegador:', error)
+      devWarn('overlay', 'Donation sound blocked', error)
     })
 
     return () => {
@@ -230,11 +268,12 @@ export default function Overlay() {
           queueRef.current.push(data)
           seenIdsRef.current.add(docSnap.id)
           hasNew = true
+          devLog('overlay', `New donation queued: ${docSnap.id}`)
         }
       }
 
       if (hasNew && !processingRef.current) {
-        processQueue()
+        processQueueRef.current?.()
       }
     })
 
@@ -242,7 +281,7 @@ export default function Overlay() {
       unsub()
       unsubSettings()
     }
-  }, [userId, processQueue])
+  }, [userId])
 
   useEffect(() => {
     return () => clearAllTimers()
@@ -271,17 +310,34 @@ export default function Overlay() {
     )
   }
 
-  const primaryColor = settings.primaryColor || DEFAULT_COLOR
+  const theme = THEME_CONFIG[settings.theme || 'neon']
+  const primaryColor = settings.primaryColor || theme.primaryColor
+  const bgColor = theme.bgColor
+  const borderColor = settings.primaryColor ? `${settings.primaryColor}40` : theme.borderColor
+  const shadowColor = settings.primaryColor ? `${settings.primaryColor}30` : theme.shadowColor
+
+  const fontSizeClass = settings.fontSize === 'sm' ? 'text-base' : settings.fontSize === 'lg' ? 'text-2xl' : 'text-lg'
+  const amountSizeClass = settings.fontSize === 'sm' ? 'text-2xl' : settings.fontSize === 'lg' ? 'text-4xl' : 'text-3xl'
+  const cardPadding = settings.cardSize === 'compact' ? 'p-4' : settings.cardSize === 'large' ? 'p-8' : 'p-6'
+
+  const positionClasses = {
+    'bottom-center': 'items-end justify-center pb-24',
+    'top-center': 'items-start justify-center pt-24',
+    'bottom-left': 'items-end justify-start pb-24 pl-24',
+    'bottom-right': 'items-end justify-end pb-24 pr-24',
+    'top-left': 'items-start justify-start pt-24 pl-24',
+    'top-right': 'items-start justify-end pt-24 pr-24',
+  }
 
   return (
-    <div className="fixed inset-0 w-screen h-screen pointer-events-none overflow-hidden flex items-end justify-center pb-24">
+    <div className={`fixed inset-0 w-screen h-screen pointer-events-none overflow-hidden flex ${positionClasses[settings.overlayPosition || 'bottom-center']}`}>
       <audio
         ref={audioRef}
         preload="auto"
         className="hidden"
         onEnded={handleMediaEnd}
         onError={() => {
-          console.warn('Erro ao carregar áudio do overlay')
+          devWarn('overlay', 'Error loading audio')
           handleMediaEnd()
         }}
       />
@@ -292,22 +348,29 @@ export default function Overlay() {
         playsInline
         onEnded={handleMediaEnd}
         onError={() => {
-          console.warn('Erro ao carregar vídeo do overlay')
+          devWarn('overlay', 'Error loading hidden video')
           handleMediaEnd()
         }}
       />
 
       {active && (
         <div
-          className={`max-w-xl w-full mx-6 p-6 rounded-2xl backdrop-blur-xl border transition-all duration-500 relative ${
-            exiting ? 'alert-exit' : 'alert-enter'
-          }`}
+          className={`max-w-xl w-full mx-6 ${cardPadding} rounded-2xl backdrop-blur-xl border transition-all duration-500 relative overflow-hidden`}
           style={{
-            backgroundColor: 'rgba(5, 8, 7, 0.85)',
-            borderColor: `${primaryColor}40`,
-            boxShadow: `0 0 40px ${primaryColor}30, 0 0 80px ${primaryColor}10, 0 8px 32px rgba(0, 0, 0, 0.4)`,
+            backgroundColor: bgColor,
+            borderColor,
+            boxShadow: `0 0 40px ${shadowColor}, 0 0 80px ${shadowColor.replace('0.3', '0.1')}, 0 8px 32px rgba(0, 0, 0, 0.4)`,
           }}
         >
+          {progress > 0 && progress < 100 && (
+            <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/30">
+              <div
+                className="h-full transition-all duration-100"
+                style={{ width: `${progress}%`, backgroundColor: primaryColor }}
+              />
+            </div>
+          )}
+
           {active.type === 'video' && videoSoundLocked && (
             <button
               onClick={unlockVideoSound}
@@ -332,7 +395,7 @@ export default function Overlay() {
                 className="w-full max-h-48 object-contain bg-black/50"
                 onEnded={handleMediaEnd}
                 onError={() => {
-                  console.warn('Erro ao reproduzir vídeo visível')
+                  devWarn('overlay', 'Error playing visible video')
                   handleMediaEnd()
                 }}
               />
@@ -340,7 +403,7 @@ export default function Overlay() {
           )}
 
           <div className="flex items-start gap-5">
-            {active.type !== 'video' && (
+            {settings.gifEnabled !== false && active.type !== 'video' && (
               <img
                 src={getDonationGif(active.amount)}
                 alt="donation animation"
@@ -349,16 +412,16 @@ export default function Overlay() {
             )}
 
             <div className="flex-1 min-w-0">
-              <div className="text-2xl font-bold text-offwhite tracking-tight leading-tight">
-                <span className="text-sage text-base font-normal mr-1">Doação de</span>
+              <div className={`${fontSizeClass} font-bold text-offwhite tracking-tight leading-tight`}>
+                <span className="text-sage text-sm font-normal mr-1">Doação de</span>
                 {active.donorName || 'Anônimo'}
               </div>
-              <div className="text-3xl font-black mt-1 tracking-tight" style={{ color: primaryColor }}>
+              <div className={`${amountSizeClass} font-black mt-1 tracking-tight`} style={{ color: primaryColor }}>
                 {formatCurrency(Number(active.amount) || 0)}
               </div>
 
               {active.type === 'text' && active.message && (
-                <div className="text-sage text-base mt-2 break-words" title={active.message}>
+                <div className={`text-sage mt-2 break-words ${fontSizeClass}`} title={active.message}>
                   &ldquo;{active.message}&rdquo;
                 </div>
               )}
