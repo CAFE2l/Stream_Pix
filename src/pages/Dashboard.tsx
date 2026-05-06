@@ -21,6 +21,12 @@ export default function Dashboard() {
     primaryColor: '#00FF88',
     duration: 5,
     overlayEnabled: true,
+    theme: 'neon',
+    soundEnabled: true,
+    gifEnabled: true,
+    overlayPosition: 'bottom-center',
+    fontSize: 'md',
+    cardSize: 'normal',
   })
   const [total, setTotal] = useState(0)
   const [alertsCount, setAlertsCount] = useState(0)

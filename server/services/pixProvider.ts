@@ -2,11 +2,13 @@ export interface CreatePixChargeInput {
   txid: string
   amount: number
   payerName: string
+  payerEmail?: string
   description?: string
 }
 
 export interface CreatePixChargeOutput {
   txid: string
+  paymentId: string
   qrCode: string
   pixCopiaECola: string
   expiresIn: number
@@ -14,6 +16,7 @@ export interface CreatePixChargeOutput {
 
 export interface WebhookVerificationResult {
   valid: boolean
+  paymentId?: string
   txid?: string
   status?: string
   amount?: number
@@ -37,7 +40,7 @@ function calculateCRC16(payload: string): string {
   return crc.toString(16).toUpperCase().padStart(4, '0')
 }
 
-function buildPixPayload(txid: string, amount: number, key: string): string {
+function buildStaticPixPayload(txid: string, amount: number, key: string): string {
   const amountStr = amount.toFixed(2)
   const merchantName = 'STREAMPIX'
   const merchantCity = 'SAO PAULO'
@@ -70,12 +73,11 @@ function buildPixPayload(txid: string, amount: number, key: string): string {
 
 class MockPixProvider implements PixProvider {
   async createCharge(input: CreatePixChargeInput): Promise<CreatePixChargeOutput> {
-    console.log('[MockPixProvider] Creating charge:', input)
-
-    const pixCopiaECola = buildPixPayload(input.txid, input.amount, `DONATION_${input.txid}`)
+    const pixCopiaECola = buildStaticPixPayload(input.txid, input.amount, `DONATION_${input.txid}`)
 
     return {
       txid: input.txid,
+      paymentId: `mock_${input.txid}`,
       qrCode: pixCopiaECola,
       pixCopiaECola,
       expiresIn: 1800,
@@ -90,63 +92,146 @@ class MockPixProvider implements PixProvider {
   }
 }
 
-class EfiPixProvider implements PixProvider {
-  async createCharge(_input: CreatePixChargeInput): Promise<CreatePixChargeOutput> {
-    if (!process.env.EFI_CLIENT_ID || !process.env.EFI_CLIENT_SECRET || !process.env.EFI_CERT_PATH) {
-      throw new Error('Efí Pix provider não configurado. Configure EFI_CLIENT_ID, EFI_CLIENT_SECRET e EFI_CERT_PATH.')
-    }
-
-    throw new Error('Efí Pix provider ainda não implementado. Configure as credenciais e implemente a lógica de cobrança.')
-  }
-
-  async verifyWebhook(
-    _payload: unknown,
-    _headers: Record<string, string>
-  ): Promise<WebhookVerificationResult> {
-    if (!process.env.EFI_CLIENT_ID || !process.env.EFI_CLIENT_SECRET || !process.env.EFI_CERT_PATH) {
-      throw new Error('Efí Pix provider não configurado.')
-    }
-
-    throw new Error('Efí webhook handler ainda não implementado.')
-  }
-}
-
 class MercadoPagoPixProvider implements PixProvider {
-  async createCharge(_input: CreatePixChargeInput): Promise<CreatePixChargeOutput> {
-    if (!process.env.MERCADO_PAGO_ACCESS_TOKEN) {
-      throw new Error('Mercado Pago Pix provider não configurado. Configure MERCADO_PAGO_ACCESS_TOKEN.')
+  private accessToken: string
+  private baseUrl = 'https://api.mercadopago.com'
+
+  constructor() {
+    this.accessToken = process.env.MERCADO_PAGO_ACCESS_TOKEN || ''
+  }
+
+  private getHeaders(): Record<string, string> {
+    return {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${this.accessToken}`,
+      'X-Idempotency-Key': `sp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    }
+  }
+
+  async createCharge(input: CreatePixChargeInput): Promise<CreatePixChargeOutput> {
+    if (!this.accessToken) {
+      throw new Error('Mercado Pago não configurado. Adicione MERCADO_PAGO_ACCESS_TOKEN no .env')
     }
 
-    throw new Error('Mercado Pago Pix provider ainda não implementado. Configure o token e implemente a lógica de cobrança.')
+    const paymentData = {
+      transaction_amount: input.amount,
+      description: input.description || `Doação Stream Pix`,
+      payment_method_id: 'pix',
+      payer: {
+        email: input.payerEmail || 'donor@streampix.com',
+        first_name: input.payerName || 'Doador',
+      },
+      external_reference: input.txid,
+      notification_url: `${process.env.FRONTEND_URL || 'http://localhost:3001'}/api/pix/webhook`,
+    }
+
+    const response = await fetch(`${this.baseUrl}/v1/payments`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(paymentData),
+    })
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      console.error('[MercadoPago] Failed to create payment:', error)
+      throw new Error(error.message || `Mercado Pago API error: ${response.status}`)
+    }
+
+    const data = await response.json()
+
+    const qrCode = data.point_of_interaction?.transaction_data?.qr_code || ''
+    const pixCopiaECola = data.point_of_interaction?.transaction_data?.qr_code || ''
+    const paymentId = String(data.id)
+
+    if (!paymentId || !qrCode) {
+      throw new Error('Mercado Pago não retornou dados do Pix')
+    }
+
+    return {
+      txid: input.txid,
+      paymentId,
+      qrCode,
+      pixCopiaECola,
+      expiresIn: 1800,
+    }
+  }
+
+  async verifyPayment(paymentId: string): Promise<{
+    status: string
+    amount: number
+    externalReference: string
+    endToEndId?: string
+  } | null> {
+    if (!this.accessToken) {
+      throw new Error('Mercado Pago não configurado')
+    }
+
+    const response = await fetch(`${this.baseUrl}/v1/payments/${paymentId}`, {
+      method: 'GET',
+      headers: this.getHeaders(),
+    })
+
+    if (!response.ok) {
+      console.error(`[MercadoPago] Failed to fetch payment ${paymentId}:`, response.status)
+      return null
+    }
+
+    const data = await response.json()
+
+    return {
+      status: data.status,
+      amount: data.transaction_amount,
+      externalReference: data.external_reference,
+      endToEndId: data.point_of_interaction?.transaction_data?.end_to_end_id,
+    }
   }
 
   async verifyWebhook(
-    _payload: unknown,
+    payload: unknown,
     _headers: Record<string, string>
   ): Promise<WebhookVerificationResult> {
-    if (!process.env.MERCADO_PAGO_ACCESS_TOKEN) {
-      throw new Error('Mercado Pago Pix provider não configurado.')
+    const data = payload as Record<string, unknown>
+
+    if (data.type === 'payment' && data.data?.id) {
+      const paymentId = String(data.data.id)
+      const payment = await this.verifyPayment(paymentId)
+
+      if (!payment) {
+        return { valid: false }
+      }
+
+      return {
+        valid: true,
+        paymentId,
+        txid: payment.externalReference,
+        status: payment.status,
+        amount: payment.amount,
+        endToEndId: payment.endToEndId,
+      }
     }
 
-    throw new Error('Mercado Pago webhook handler ainda não implementado.')
+    return { valid: false }
   }
 }
 
 function createProvider(): PixProvider {
   const provider = process.env.PIX_PROVIDER || 'mock'
 
-  switch (provider) {
-    case 'efi':
-      console.log('[PixProvider] Using Efí provider')
-      return new EfiPixProvider()
-    case 'mercadopago':
-      console.log('[PixProvider] Using Mercado Pago provider')
-      return new MercadoPagoPixProvider()
-    case 'mock':
-    default:
-      console.log('[PixProvider] Using Mock provider (development only)')
-      return new MockPixProvider()
+  if (provider === 'mercadopago') {
+    if (!process.env.MERCADO_PAGO_ACCESS_TOKEN) {
+      console.error('[PixProvider] Mercado Pago selected but MERCADO_PAGO_ACCESS_TOKEN not set')
+      throw new Error('PIX_PROVIDER=mercadopago requires MERCADO_PAGO_ACCESS_TOKEN')
+    }
+    console.log('[PixProvider] Using Mercado Pago provider')
+    return new MercadoPagoPixProvider()
   }
+
+  if (provider === 'mock') {
+    console.log('[PixProvider] Using Mock provider (development only)')
+    return new MockPixProvider()
+  }
+
+  throw new Error(`Unknown PIX_PROVIDER: ${provider}`)
 }
 
 export const pixProvider = createProvider()
