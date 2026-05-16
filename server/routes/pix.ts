@@ -45,8 +45,17 @@ router.post('/create-charge', async (req: Request, res: Response) => {
       return res.status(503).json({ error: 'Firebase Admin não configurado no backend.' })
     }
 
+    const settingsSnap = await adminDb.collection('users').doc(streamerId).collection('settings').doc('main').get()
+    const streamerPixKey = settingsSnap.exists ? String(settingsSnap.data()?.pixKey || '').trim() : ''
+
+    if (!streamerPixKey) {
+      return res.status(400).json({ error: 'Streamer sem chave Pix configurada.' })
+    }
+
     const donationId = crypto.randomUUID()
-    const txid = `sp_${streamerId.slice(0, 6)}_${donationId.slice(0, 8)}`.replace(/-/g, '').toLowerCase()
+    const txid = `sp${streamerId.slice(0, 6)}${donationId.slice(0, 8)}`
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .toLowerCase()
 
     const donationData = {
       donorName: name?.trim() || 'Anônimo',
@@ -75,6 +84,7 @@ router.post('/create-charge', async (req: Request, res: Response) => {
     const charge = await pixProvider.createCharge({
       txid,
       amount,
+      pixKey: streamerPixKey,
       payerName: donationData.donorName,
       payerEmail: undefined,
       description: `Doação Stream Pix - ${type}`,

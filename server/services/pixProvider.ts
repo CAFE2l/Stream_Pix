@@ -1,6 +1,7 @@
 export interface CreatePixChargeInput {
   txid: string
   amount: number
+  pixKey?: string
   payerName: string
   payerEmail?: string
   description?: string
@@ -73,7 +74,11 @@ function buildStaticPixPayload(txid: string, amount: number, key: string): strin
 
 class MockPixProvider implements PixProvider {
   async createCharge(input: CreatePixChargeInput): Promise<CreatePixChargeOutput> {
-    const pixCopiaECola = buildStaticPixPayload(input.txid, input.amount, `DONATION_${input.txid}`)
+    if (!input.pixKey?.trim()) {
+      throw new Error('Chave Pix do streamer não configurada')
+    }
+
+    const pixCopiaECola = buildStaticPixPayload(input.txid, input.amount, input.pixKey.trim())
 
     return {
       txid: input.txid,
