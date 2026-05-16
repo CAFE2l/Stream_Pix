@@ -5,9 +5,10 @@ import Card from '../components/ui/Card'
 import Input from '../components/ui/Input'
 import Button from '../components/ui/Button'
 import Toast from '../components/ui/Toast'
-import { doc, setDoc, getDoc, collection, addDoc, getDocs, type DocumentSnapshot } from 'firebase/firestore'
+import { doc, setDoc, getDoc, collection, addDoc, onSnapshot, updateDoc, type DocumentSnapshot } from 'firebase/firestore'
 import { db, serverTimestamp } from '../services/firebase'
 import type { UserSettings, DonationEvent, DonationType } from '../types'
+import { DONATION_LABELS } from '../types'
 import { formatCurrency } from '../utils/formatCurrency'
 import QRCode from 'qrcode'
 
@@ -33,6 +34,8 @@ export default function Dashboard() {
   const [toast, setToast] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [qrCodeUrl, setQrCodeUrl] = useState('')
+  const [pendingDonations, setPendingDonations] = useState<(DonationEvent & { id: string })[]>([])
+  const [processingDonationId, setProcessingDonationId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!uid) return
@@ -43,20 +46,37 @@ export default function Dashboard() {
       if (snap.exists()) setSettings(snap.data() as UserSettings)
     }
 
-    const loadStats = async () => {
+    const unsubscribeDonations = () => {
       const donationsCol = collection(db, 'users', uid, 'donations')
-      const snaps = await getDocs(donationsCol)
-      let t = 0
-      let count = 0
-      snaps.forEach((d: DocumentSnapshot) => {
-        const data = d.data() as DonationEvent
-        if (data.isTest !== true && data.status === 'paid') {
-          t += data.amount || 0
-          count++
-        }
+      return onSnapshot(donationsCol, (snaps) => {
+        let t = 0
+        let count = 0
+        const pending: (DonationEvent & { id: string })[] = []
+
+        snaps.forEach((d: DocumentSnapshot) => {
+          const data = d.data() as DonationEvent
+          if (data.isTest !== true && data.status === 'paid') {
+            t += data.amount || 0
+            count++
+          }
+
+          if (data.status === 'pending') {
+            pending.push({ ...data, id: d.id })
+          }
+        })
+
+        pending.sort((a, b) => {
+          const aTime = typeof a.createdAt === 'string' ? Date.parse(a.createdAt) : a.createdAt?.toMillis?.() || 0
+          const bTime = typeof b.createdAt === 'string' ? Date.parse(b.createdAt) : b.createdAt?.toMillis?.() || 0
+          return bTime - aTime
+        })
+
+        setTotal(t)
+        setAlertsCount(count)
+        setPendingDonations(pending)
+      }, () => {
+        setToast('Erro ao carregar doações pendentes')
       })
-      setTotal(t)
-      setAlertsCount(count)
     }
 
     const generateQrCode = async () => {
@@ -74,8 +94,10 @@ export default function Dashboard() {
     }
 
     loadSettings()
-    loadStats()
+    const unsubscribe = unsubscribeDonations()
     generateQrCode()
+
+    return unsubscribe
   }, [uid])
 
   async function save() {
@@ -134,6 +156,55 @@ export default function Dashboard() {
     } catch {
       setToast('Erro ao enviar teste')
     }
+  }
+
+  async function confirmDonation(donationId: string) {
+    if (!uid) return
+    setProcessingDonationId(donationId)
+    try {
+      await updateDoc(doc(db, 'users', uid, 'donations', donationId), {
+        status: 'paid',
+        paidAt: serverTimestamp(),
+        displayed: false,
+        isTest: false,
+      })
+      setToast('Doação confirmada para o overlay')
+    } catch {
+      setToast('Erro ao confirmar doação')
+    } finally {
+      setProcessingDonationId(null)
+    }
+  }
+
+  async function rejectDonation(donationId: string) {
+    if (!uid) return
+    setProcessingDonationId(donationId)
+    try {
+      await updateDoc(doc(db, 'users', uid, 'donations', donationId), {
+        status: 'failed',
+        failureReason: 'Pagamento recusado manualmente',
+      })
+      setToast('Doação recusada')
+    } catch {
+      setToast('Erro ao recusar doação')
+    } finally {
+      setProcessingDonationId(null)
+    }
+  }
+
+  function formatDonationDate(donation: DonationEvent) {
+    const createdAt = donation.createdAt
+    if (!createdAt) return 'Agora'
+
+    const date = typeof createdAt === 'string' ? new Date(createdAt) : createdAt.toDate()
+    if (Number.isNaN(date.getTime())) return 'Agora'
+
+    return date.toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
   }
 
   const clearToast = useCallback(() => setToast(null), [])
@@ -195,6 +266,86 @@ export default function Dashboard() {
           <div className="grid lg:grid-cols-3 gap-6">
             {/* Settings — 2 cols */}
             <div className="lg:col-span-2">
+              <Card className="mb-6">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-5 h-5 text-neon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8.25v7.5m3.75-3.75h-7.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <h3 className="text-base font-bold text-offwhite tracking-tight">Doações pendentes</h3>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-lg border border-neon/20 bg-neon/5 text-xs font-semibold text-neon">
+                    {pendingDonations.length}
+                  </span>
+                </div>
+
+                {pendingDonations.length === 0 ? (
+                  <div className="py-8 text-center border border-dashed border-border rounded-xl bg-surface/30">
+                    <div className="text-sm font-medium text-offwhite">Nenhuma doação aguardando confirmação</div>
+                    <p className="text-xs text-sage/70 mt-1">Quando alguém pagar no Pix, confira no app da CAIXA e aprove aqui.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {pendingDonations.map(donation => (
+                      <div
+                        key={donation.id}
+                        className="rounded-xl border border-border bg-surface/40 p-4"
+                      >
+                        <div className="flex flex-col md:flex-row md:items-start gap-4">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2 mb-2">
+                              <span className="text-lg font-bold text-gradient">{formatCurrency(donation.amount || 0)}</span>
+                              <span className="text-xs text-sage/70">{formatDonationDate(donation)}</span>
+                              <span className="px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-300 text-xs border border-amber-500/20">
+                                pendente
+                              </span>
+                            </div>
+
+                            <div className="grid sm:grid-cols-2 gap-2 text-sm">
+                              <div>
+                                <span className="text-sage">Doador: </span>
+                                <span className="text-offwhite font-medium">{donation.donorName || 'Anônimo'}</span>
+                              </div>
+                              <div>
+                                <span className="text-sage">Tipo: </span>
+                                <span className="text-offwhite font-medium">{DONATION_LABELS[donation.type]?.title || donation.type}</span>
+                              </div>
+                            </div>
+
+                            {donation.message && (
+                              <div className="mt-2 text-sm text-offwhite/90 break-words">
+                                {donation.message}
+                              </div>
+                            )}
+
+                            <div className="mt-3 text-xs font-mono text-sage/80 break-all rounded-lg border border-border bg-bg/40 px-2.5 py-2">
+                              Código: {donation.txid || donation.donationId || donation.id}
+                            </div>
+                          </div>
+
+                          <div className="flex md:flex-col gap-2 md:w-32 shrink-0">
+                            <button
+                              onClick={() => confirmDonation(donation.id)}
+                              disabled={processingDonationId === donation.id}
+                              className="flex-1 md:flex-none px-3 py-2 rounded-xl bg-neon/10 text-neon text-sm font-semibold border border-neon/20 hover:bg-neon/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              Confirmar
+                            </button>
+                            <button
+                              onClick={() => rejectDonation(donation.id)}
+                              disabled={processingDonationId === donation.id}
+                              className="flex-1 md:flex-none px-3 py-2 rounded-xl bg-red-500/10 text-red-300 text-sm font-semibold border border-red-500/20 hover:bg-red-500/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              Recusar
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+
               <Card>
                 <div className="flex items-center gap-2 mb-6">
                   <svg className="w-5 h-5 text-neon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
