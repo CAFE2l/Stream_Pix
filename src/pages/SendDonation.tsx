@@ -242,9 +242,12 @@ export default function SendDonation() {
 
   if (success) {
     return (
-      <div className="min-h-screen bg-bg flex items-center justify-center px-4">
-        <div className="w-full max-w-sm text-center">
-          <div className="w-16 h-16 rounded-2xl bg-neon/10 border border-neon/20 flex items-center justify-center mx-auto mb-6">
+      <div className="min-h-screen donate-shell flex items-center justify-center px-4 py-10">
+        <div className="donate-card w-full max-w-sm rounded-[28px] p-8 text-center">
+          <div className="donate-profile-ring w-20 h-20 rounded-full border border-neon/35 bg-black/50 p-1.5 mx-auto mb-5">
+            <img src="/images/pfp.png" alt={settings.streamerName || 'Streamer'} className="w-full h-full rounded-full object-cover" />
+          </div>
+          <div className="w-16 h-16 rounded-2xl bg-neon/10 border border-neon/20 flex items-center justify-center mx-auto mb-6 shadow-neon">
             <svg className="w-8 h-8 text-neon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
             </svg>
@@ -255,7 +258,7 @@ export default function SendDonation() {
           </p>
           <button
             onClick={() => window.location.reload()}
-            className="px-6 py-2.5 rounded-xl bg-neon/10 text-neon text-sm font-medium border border-neon/20 hover:bg-neon/20 transition-colors"
+            className="px-6 py-2.5 rounded-xl bg-neon/10 text-neon text-sm font-medium border border-neon/20 hover:bg-neon/20 hover:shadow-neon transition-all duration-300"
           >
             Enviar outra doação
           </button>
@@ -265,31 +268,36 @@ export default function SendDonation() {
   }
 
   const minAmount = selectedType ? MIN_AMOUNTS[selectedType] : 0
+  const streamerName = settings.streamerName || 'Stream Pix'
 
   return (
-    <div className="min-h-screen bg-bg">
-      <div className="fixed inset-0 bg-gradient opacity-50" />
-      <div className="fixed inset-0 bg-grid-fine opacity-30" />
+    <div className="min-h-screen donate-shell overflow-hidden">
+      <div className="fixed inset-0 bg-grid-fine opacity-45" />
+      <div className="fixed inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-neon/70 to-transparent shadow-[0_0_24px_rgba(0,255,136,0.75)]" />
+      <div className="fixed inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-offwhite/25 to-transparent" />
 
       <div className="relative z-10 min-h-screen flex flex-col">
-        <header className="px-4 py-5 border-b border-border/50">
-          <div className="max-w-lg mx-auto flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-neon/20 to-cyan/20 flex items-center justify-center overflow-hidden">
-              <img src="/images/icone.png" alt="Stream Pix" className="w-8 h-8 object-contain" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold text-offwhite tracking-tight">{settings.streamerName || 'Stream Pix'}</h1>
-              <p className="text-xs text-sage">Envie uma doação para aparecer na live</p>
-            </div>
-          </div>
-        </header>
+        <main className="flex-1 px-4 py-8 md:py-12">
+          <div className="max-w-xl mx-auto">
+            <section className="donate-card rounded-[30px] p-5 sm:p-7">
+              <div className="relative text-center pb-6 mb-6 border-b border-offwhite/10">
+                <div className="absolute inset-x-8 bottom-0 h-px bg-gradient-to-r from-transparent via-neon/60 to-transparent shadow-[0_0_18px_rgba(0,255,136,0.7)]" />
+                <div className="donate-profile-ring w-24 h-24 rounded-full border border-neon/35 bg-black/55 p-1.5 mx-auto mb-4">
+                  <img src="/images/pfp.png" alt={streamerName} className="w-full h-full rounded-full object-cover" />
+                </div>
+                <div className="inline-flex items-center gap-2 rounded-full border border-neon/20 bg-neon/5 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-neon mb-3">
+                  <span className="w-1.5 h-1.5 rounded-full bg-neon animate-pulse" />
+                  Donate Pix
+                </div>
+                <h1 className="text-2xl sm:text-3xl font-black text-offwhite tracking-tight">{streamerName}</h1>
+                <p className="mt-2 text-sm text-sage">Envie uma doação para aparecer na live</p>
+              </div>
 
-        <main className="flex-1 px-4 py-6">
-          <div className="max-w-lg mx-auto space-y-6">
+              <div className="space-y-6">
             {!showPayment && (
-              <>
+              <div className="donate-step">
                 <div>
-                  <h2 className="text-sm font-semibold text-sage mb-3 uppercase tracking-wider">Escolha o tipo</h2>
+                  <h2 className="text-sm font-semibold text-offwhite mb-3 uppercase tracking-wider">Escolha o tipo</h2>
                   <div className="space-y-2">
                     {(['text', 'audio', 'video'] as DonationType[]).map(type => (
                       <DonationTypeCard
@@ -323,7 +331,7 @@ export default function SendDonation() {
                 </div>
 
                 {selectedType && (
-                  <div className="space-y-4">
+                  <div className="space-y-4 mt-6">
                     <div>
                       <label className="block text-xs font-medium text-sage mb-1.5">Seu nome</label>
                       <Input
@@ -382,7 +390,7 @@ export default function SendDonation() {
                     <button
                       onClick={handleCreateDonation}
                       disabled={creatingDonation}
-                      className="w-full py-3 rounded-xl bg-gradient-to-r from-neon to-cyan text-bg font-semibold text-sm shadow-neon hover:shadow-glow-lg transition-all duration-300 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
+                      className="w-full py-3.5 rounded-xl bg-gradient-to-r from-neon via-emerald-glow to-neon bg-[length:200%_100%] text-bg font-black text-sm shadow-neon hover:shadow-glow-lg hover:bg-right transition-all duration-500 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       {creatingDonation ? (
                         <span className="flex items-center justify-center gap-2">
@@ -395,11 +403,11 @@ export default function SendDonation() {
                     </button>
                   </div>
                 )}
-              </>
+              </div>
             )}
 
             {showPayment && (
-              <div className="space-y-6">
+              <div className="donate-step space-y-6">
                 <button
                   onClick={() => {
                     setShowPayment(false)
@@ -415,10 +423,10 @@ export default function SendDonation() {
                   Voltar
                 </button>
 
-                <div className="glass p-6 space-y-6">
+                <div className="rounded-3xl border border-neon/15 bg-black/25 p-5 sm:p-6 space-y-6 shadow-[0_0_38px_rgba(0,255,136,0.08)]">
                   <div className="text-center">
-                    <h2 className="text-lg font-bold text-offwhite">Pagamento via Pix</h2>
-                    <p className="text-sm text-sage mt-1">Escaneie o QR Code ou copie a chave</p>
+                    <h2 className="text-xl font-black text-offwhite">Pagamento via Pix</h2>
+                    <p className="text-sm text-sage mt-1">Escaneie o QR Code ou copie o código</p>
                   </div>
 
                   {qrCode && (
@@ -429,16 +437,16 @@ export default function SendDonation() {
                   )}
 
                   <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
+                    <div className="flex justify-between gap-4 rounded-xl border border-offwhite/5 bg-white/[0.03] px-3 py-2">
                       <span className="text-sage">De:</span>
                       <span className="text-offwhite font-medium">{donorName}</span>
                     </div>
-                    <div className="flex justify-between">
+                    <div className="flex justify-between gap-4 rounded-xl border border-offwhite/5 bg-white/[0.03] px-3 py-2">
                       <span className="text-sage">Tipo:</span>
                       <span className="text-offwhite font-medium">{DONATION_LABELS[selectedType!].title}</span>
                     </div>
                     {selectedType === 'text' && message && (
-                      <div className="flex justify-between">
+                      <div className="flex justify-between gap-4 rounded-xl border border-offwhite/5 bg-white/[0.03] px-3 py-2">
                         <span className="text-sage">Mensagem:</span>
                         <span className="text-offwhite font-medium truncate max-w-[200px]">{message}</span>
                       </div>
@@ -492,6 +500,8 @@ export default function SendDonation() {
                 </div>
               </div>
             )}
+              </div>
+            </section>
           </div>
         </main>
       </div>

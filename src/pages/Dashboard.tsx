@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import useAuth from '../hooks/useAuth'
 import Navbar from '../components/layout/Navbar'
 import Card from '../components/ui/Card'
@@ -7,10 +7,13 @@ import Button from '../components/ui/Button'
 import Toast from '../components/ui/Toast'
 import { doc, setDoc, getDoc, collection, addDoc, onSnapshot, updateDoc, type DocumentSnapshot } from 'firebase/firestore'
 import { db, serverTimestamp } from '../services/firebase'
-import type { UserSettings, DonationEvent, DonationType } from '../types'
+import type { UserSettings, DonationEvent, DonationType, PaymentStatus } from '../types'
 import { DONATION_LABELS } from '../types'
 import { formatCurrency } from '../utils/formatCurrency'
 import QRCode from 'qrcode'
+
+const TRANSACTIONS_PER_PAGE = 6
+const PAGE_GROUP_SIZE = 3
 
 export default function Dashboard() {
   const { user } = useAuth()
@@ -35,10 +38,19 @@ export default function Dashboard() {
   const [saving, setSaving] = useState(false)
   const [qrCodeUrl, setQrCodeUrl] = useState('')
   const [pendingDonations, setPendingDonations] = useState<(DonationEvent & { id: string })[]>([])
+  const [transactionHistory, setTransactionHistory] = useState<(DonationEvent & { id: string })[]>([])
+  const [transactionPage, setTransactionPage] = useState(1)
   const [processingDonationId, setProcessingDonationId] = useState<string | null>(null)
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
+    typeof Notification === 'undefined' ? 'denied' : Notification.permission
+  )
+  const seenPendingDonationIdsRef = useRef<Set<string>>(new Set())
+  const hasLoadedDonationsRef = useRef(false)
 
   useEffect(() => {
     if (!uid) return
+    seenPendingDonationIdsRef.current = new Set()
+    hasLoadedDonationsRef.current = false
 
     const loadSettings = async () => {
       const ref = doc(db, 'users', uid, 'settings', 'main')
@@ -52,28 +64,47 @@ export default function Dashboard() {
         let t = 0
         let count = 0
         const pending: (DonationEvent & { id: string })[] = []
+        const history: (DonationEvent & { id: string })[] = []
 
         snaps.forEach((d: DocumentSnapshot) => {
           const data = d.data() as DonationEvent
+          const donation = { ...data, id: d.id }
           if (data.isTest !== true && data.status === 'paid') {
             t += data.amount || 0
             count++
           }
 
           if (data.status === 'pending') {
-            pending.push({ ...data, id: d.id })
+            pending.push(donation)
+          }
+
+          if (data.status !== 'pending') {
+            history.push(donation)
           }
         })
 
-        pending.sort((a, b) => {
+        const sortNewestFirst = (a: DonationEvent, b: DonationEvent) => {
           const aTime = typeof a.createdAt === 'string' ? Date.parse(a.createdAt) : a.createdAt?.toMillis?.() || 0
           const bTime = typeof b.createdAt === 'string' ? Date.parse(b.createdAt) : b.createdAt?.toMillis?.() || 0
           return bTime - aTime
-        })
+        }
+
+        pending.sort(sortNewestFirst)
+        history.sort(sortNewestFirst)
+
+        const previousIds = seenPendingDonationIdsRef.current
+        const newPending = pending.filter(donation => !previousIds.has(donation.id))
+        seenPendingDonationIdsRef.current = new Set(pending.map(donation => donation.id))
+
+        if (hasLoadedDonationsRef.current && newPending.length > 0) {
+          newPending.forEach(showDonationNotification)
+        }
+        hasLoadedDonationsRef.current = true
 
         setTotal(t)
         setAlertsCount(count)
         setPendingDonations(pending)
+        setTransactionHistory(history)
       }, () => {
         setToast('Erro ao carregar doações pendentes')
       })
@@ -192,6 +223,82 @@ export default function Dashboard() {
     }
   }
 
+  async function enableNotifications() {
+    if (typeof Notification === 'undefined') {
+      setToast('Este navegador não suporta notificações')
+      return
+    }
+
+    const permission = await Notification.requestPermission()
+    setNotificationPermission(permission)
+
+    if (permission === 'granted') {
+      setToast('Notificações de doação ativadas')
+    } else if (permission === 'denied') {
+      setToast('Notificações bloqueadas no navegador')
+    } else {
+      setToast('Permissão de notificação não ativada')
+    }
+  }
+
+  function showDonationNotification(donation: DonationEvent & { id: string }) {
+    const donorName = donation.donorName || 'Anônimo'
+    const amount = formatCurrency(donation.amount || 0)
+    const message = donation.message ? `Mensagem: ${donation.message}` : 'Aguardando confirmação manual'
+
+    setToast(`Nova doação pendente: ${donorName} - ${amount}`)
+
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') {
+      return
+    }
+
+    try {
+      const notification = new Notification('Nova doação pendente', {
+        body: `${donorName} enviou ${amount}. ${message}`,
+        icon: '/images/icone.png',
+        tag: `donation-${donation.id}`,
+      })
+
+      notification.onclick = () => {
+        window.focus()
+        notification.close()
+      }
+    } catch {
+      // Browser notification can fail depending on OS/browser settings.
+    }
+  }
+
+  function getNotificationStatus() {
+    if (typeof Notification === 'undefined') return 'Indisponível'
+    if (notificationPermission === 'granted') return 'Ativas'
+    if (notificationPermission === 'denied') return 'Bloqueadas'
+    return 'Desativadas'
+  }
+
+  function getStatusLabel(status: PaymentStatus) {
+    if (status === 'paid') return 'confirmada'
+    if (status === 'played') return 'exibida'
+    if (status === 'failed') return 'recusada'
+    if (status === 'expired') return 'expirada'
+    return 'pendente'
+  }
+
+  function getStatusClass(status: PaymentStatus) {
+    if (status === 'paid' || status === 'played') return 'border-neon/25 bg-neon/10 text-neon'
+    if (status === 'failed' || status === 'expired') return 'border-red-500/25 bg-red-500/10 text-red-300'
+    return 'border-amber-500/25 bg-amber-500/10 text-amber-300'
+  }
+
+  function getTransactionStatusClass(donation: DonationEvent) {
+    if (donation.isTest) return 'border-yellow-400/30 bg-yellow-400/10 text-yellow-300'
+    return getStatusClass(donation.status)
+  }
+
+  function getTransactionStatusLabel(donation: DonationEvent) {
+    if (donation.isTest) return 'Teste'
+    return getStatusLabel(donation.status)
+  }
+
   function formatDonationDate(donation: DonationEvent) {
     const createdAt = donation.createdAt
     if (!createdAt) return 'Agora'
@@ -206,6 +313,17 @@ export default function Dashboard() {
       minute: '2-digit',
     })
   }
+
+  const totalTransactionPages = Math.max(1, Math.ceil(transactionHistory.length / TRANSACTIONS_PER_PAGE))
+  const currentTransactionPage = Math.min(transactionPage, totalTransactionPages)
+  const transactionStart = (currentTransactionPage - 1) * TRANSACTIONS_PER_PAGE
+  const visibleTransactions = transactionHistory.slice(transactionStart, transactionStart + TRANSACTIONS_PER_PAGE)
+  const currentPageGroup = Math.floor((currentTransactionPage - 1) / PAGE_GROUP_SIZE)
+  const firstPageInGroup = currentPageGroup * PAGE_GROUP_SIZE + 1
+  const visiblePageNumbers = Array.from(
+    { length: Math.min(PAGE_GROUP_SIZE, totalTransactionPages - firstPageInGroup + 1) },
+    (_, index) => firstPageInGroup + index
+  )
 
   const clearToast = useCallback(() => setToast(null), [])
 
@@ -346,6 +464,104 @@ export default function Dashboard() {
                 )}
               </Card>
 
+              <Card className="mb-6">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-5 h-5 text-neon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6l4 2m5-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <h3 className="text-base font-bold text-offwhite tracking-tight">Histórico de transações</h3>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-lg border border-neon/20 bg-neon/5 text-xs font-semibold text-neon">
+                    {transactionHistory.length}
+                  </span>
+                </div>
+
+                {transactionHistory.length === 0 ? (
+                  <div className="py-8 text-center border border-dashed border-border rounded-xl bg-surface/30">
+                    <div className="text-sm font-medium text-offwhite">Nenhuma transação no histórico</div>
+                    <p className="text-xs text-sage/70 mt-1">Doações confirmadas, recusadas ou expiradas aparecem aqui.</p>
+                  </div>
+                ) : (
+                  <>
+                    <div key={currentTransactionPage} className="space-y-3 donate-step">
+                      {visibleTransactions.map(donation => (
+                        <div
+                          key={donation.id}
+                          className="group relative overflow-hidden rounded-xl border border-border bg-surface/35 p-4 shadow-[0_16px_42px_rgba(0,0,0,0.18)] transition-all duration-300 hover:-translate-y-0.5 hover:border-neon/20 hover:bg-surface/55 hover:shadow-[0_18px_56px_rgba(0,255,136,0.08)]"
+                        >
+                          <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-neon/45 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-lg font-bold text-gradient">{formatCurrency(donation.amount || 0)}</span>
+                                <span className={`px-2 py-0.5 rounded-md border text-xs font-semibold ${getTransactionStatusClass(donation)}`}>
+                                  {getTransactionStatusLabel(donation)}
+                                </span>
+                                <span className="text-xs text-sage/70">{formatDonationDate(donation)}</span>
+                              </div>
+                              <div className="mt-2 grid gap-1 text-sm sm:grid-cols-2">
+                                <div>
+                                  <span className="text-sage">Doador: </span>
+                                  <span className="font-medium text-offwhite">{donation.donorName || 'Anônimo'}</span>
+                                </div>
+                                <div>
+                                  <span className="text-sage">Tipo: </span>
+                                  <span className="font-medium text-offwhite">{DONATION_LABELS[donation.type]?.title || donation.type}</span>
+                                </div>
+                              </div>
+                              {donation.message && (
+                                <div className="mt-2 text-sm text-offwhite/85 break-words">{donation.message}</div>
+                              )}
+                            </div>
+                            <div className="rounded-lg border border-offwhite/5 bg-bg/45 px-2.5 py-2 text-xs font-mono text-sage/75 break-all sm:max-w-[180px]">
+                              {donation.txid || donation.donationId || donation.id}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mt-5 flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="text-xs text-sage/70">
+                        Página {currentTransactionPage} de {totalTransactionPages}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setTransactionPage(Math.max(1, currentTransactionPage - 1))}
+                          disabled={currentTransactionPage === 1}
+                          aria-label="Página anterior"
+                          className="w-9 h-9 rounded-xl border border-border bg-surface/40 text-sm font-bold text-sage hover:border-neon/20 hover:text-neon hover:bg-neon/5 transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          {'<'}
+                        </button>
+                        {visiblePageNumbers.map(page => (
+                          <button
+                            key={page}
+                            onClick={() => setTransactionPage(page)}
+                            className={`w-9 h-9 rounded-xl border text-xs font-bold transition-all duration-300 ${
+                              page === currentTransactionPage
+                                ? 'border-neon/40 bg-neon/15 text-neon shadow-neon'
+                                : 'border-border bg-surface/40 text-sage hover:border-neon/20 hover:text-neon hover:bg-neon/5'
+                            }`}
+                          >
+                            {page}
+                          </button>
+                        ))}
+                        <button
+                          onClick={() => setTransactionPage(Math.min(totalTransactionPages, currentTransactionPage + 1))}
+                          disabled={currentTransactionPage === totalTransactionPages}
+                          aria-label="Próxima página"
+                          className="w-9 h-9 rounded-xl border border-border bg-surface/40 text-sm font-bold text-sage hover:border-neon/20 hover:text-neon hover:bg-neon/5 transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          {'>'}
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </Card>
+
               <Card>
                 <div className="flex items-center gap-2 mb-6">
                   <svg className="w-5 h-5 text-neon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -447,6 +663,31 @@ export default function Dashboard() {
 
             {/* Right column — 1 col */}
             <div className="space-y-6">
+              <Card>
+                <div className="flex items-center gap-2 mb-4">
+                  <svg className="w-5 h-5 text-neon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a3 3 0 11-5.714 0" />
+                  </svg>
+                  <h3 className="text-base font-bold text-offwhite tracking-tight">Notificações</h3>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 mb-4">
+                  <div>
+                    <div className="text-sm font-semibold text-offwhite">{getNotificationStatus()}</div>
+                    <div className="text-xs text-sage/70 mt-0.5">Alertas quando chegar doação pendente</div>
+                  </div>
+                  <span className={`w-2.5 h-2.5 rounded-full ${notificationPermission === 'granted' ? 'bg-neon shadow-neon' : 'bg-sage-muted/40'}`} />
+                </div>
+
+                <button
+                  onClick={enableNotifications}
+                  disabled={typeof Notification === 'undefined' || notificationPermission === 'denied'}
+                  className="w-full py-2.5 rounded-xl border border-neon/20 text-neon text-sm font-medium hover:bg-neon/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {notificationPermission === 'granted' ? 'Notificações ativadas' : 'Ativar notificações'}
+                </button>
+              </Card>
+
               {/* Preview */}
               <Card>
                 <div className="flex items-center gap-2 mb-4">

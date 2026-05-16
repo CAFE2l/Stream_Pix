@@ -173,6 +173,79 @@ body {
   animation: pulse-slow 3s ease-in-out infinite;
 }
 
+@keyframes donate-panel-in {
+  0% {
+    opacity: 0;
+    transform: translateY(22px) scale(0.97);
+    filter: blur(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes led-sweep {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+
+@keyframes profile-glow {
+  0%, 100% {
+    box-shadow: 0 0 18px rgba(0, 255, 136, 0.24), 0 0 48px rgba(0, 255, 136, 0.08);
+  }
+  50% {
+    box-shadow: 0 0 28px rgba(0, 255, 136, 0.38), 0 0 72px rgba(0, 255, 136, 0.14);
+  }
+}
+
+.donate-shell {
+  background:
+    radial-gradient(ellipse 70% 35% at 50% 0%, rgba(0, 255, 136, 0.12), transparent 62%),
+    linear-gradient(180deg, #020403 0%, #06100b 42%, #020403 100%);
+}
+
+.donate-card {
+  position: relative;
+  animation: donate-panel-in 0.58s cubic-bezier(0.16, 1, 0.3, 1) both;
+  background: linear-gradient(180deg, rgba(12, 30, 21, 0.72), rgba(3, 8, 6, 0.82));
+  border: 1px solid rgba(248, 255, 251, 0.08);
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.62),
+    0 0 0 1px rgba(0, 255, 136, 0.08),
+    0 0 48px rgba(0, 255, 136, 0.11);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+}
+
+.donate-card::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(120deg, rgba(0, 255, 136, 0.08), rgba(248, 255, 251, 0.22), rgba(0, 255, 136, 0.55), rgba(248, 255, 251, 0.12), rgba(0, 255, 136, 0.08));
+  background-size: 200% 200%;
+  animation: led-sweep 5s linear infinite;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.donate-profile-ring {
+  animation: profile-glow 3.5s ease-in-out infinite;
+}
+
+.donate-step {
+  animation: donate-panel-in 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 /* ── Scrollbar ── */
 
 ::-webkit-scrollbar {
