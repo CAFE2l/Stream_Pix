@@ -246,6 +246,90 @@ body {
   animation: donate-panel-in 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+@media (max-width: 640px) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .bg-grid-fine {
+    background-size: 48px 48px;
+  }
+
+  .glass {
+    background: rgba(10, 26, 18, 0.72);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+
+  .glass-hover {
+    transition: border-color 0.18s ease, background-color 0.18s ease;
+  }
+
+  .glass-hover:hover {
+    transform: none;
+    box-shadow: none;
+  }
+
+  .donate-shell {
+    background: linear-gradient(180deg, #020403 0%, #06100b 48%, #020403 100%);
+  }
+
+  .donate-card {
+    animation: mobile-panel-in 0.28s ease-out both;
+    box-shadow:
+      0 14px 34px rgba(0, 0, 0, 0.46),
+      0 0 0 1px rgba(0, 255, 136, 0.08);
+    backdrop-filter: blur(7px);
+    -webkit-backdrop-filter: blur(7px);
+  }
+
+  .donate-card::before {
+    animation: none;
+    background: rgba(0, 255, 136, 0.22);
+  }
+
+  .donate-profile-ring {
+    animation: none;
+    box-shadow: 0 0 18px rgba(0, 255, 136, 0.18);
+  }
+
+  .donate-step {
+    animation: mobile-panel-in 0.22s ease-out both;
+  }
+
+  .shadow-neon,
+  .shadow-glow-lg {
+    box-shadow: 0 0 14px rgba(0, 255, 136, 0.12) !important;
+  }
+
+  .animate-pulse-slow,
+  .text-gradient-shimmer {
+    animation: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+@keyframes mobile-panel-in {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* ── Scrollbar ── */
 
 ::-webkit-scrollbar {

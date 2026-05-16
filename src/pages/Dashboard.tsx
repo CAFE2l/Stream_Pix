@@ -488,7 +488,7 @@ export default function Dashboard() {
                       {visibleTransactions.map(donation => (
                         <div
                           key={donation.id}
-                          className="group relative overflow-hidden rounded-xl border border-border bg-surface/35 p-4 shadow-[0_16px_42px_rgba(0,0,0,0.18)] transition-all duration-300 hover:-translate-y-0.5 hover:border-neon/20 hover:bg-surface/55 hover:shadow-[0_18px_56px_rgba(0,255,136,0.08)]"
+                          className="group relative overflow-hidden rounded-xl border border-border bg-surface/35 p-4 shadow-[0_8px_22px_rgba(0,0,0,0.16)] transition-colors duration-200 sm:shadow-[0_16px_42px_rgba(0,0,0,0.18)] sm:transition-all sm:duration-300 sm:hover:-translate-y-0.5 sm:hover:border-neon/20 sm:hover:bg-surface/55 sm:hover:shadow-[0_18px_56px_rgba(0,255,136,0.08)]"
                         >
                           <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-neon/45 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
                           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
