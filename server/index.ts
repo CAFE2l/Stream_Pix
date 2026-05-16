@@ -2,7 +2,9 @@ import "dotenv/config";
 import express, { Request, Response } from "express";
 import cors from "cors";
 import pixRoutes from "./routes/pix.js";
+import cryptoRoutes from "./routes/crypto.js";
 import { adminDb, isConfigured } from "./services/firebaseAdmin.js";
+import { startCryptoMonitor } from "./services/cryptoProvider.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -28,6 +30,9 @@ if (!isConfigured) {
 }
 
 app.use("/api/pix", pixRoutes);
+app.use("/api/crypto", cryptoRoutes);
+
+startCryptoMonitor();
 
 app.post(
   "/api/dev/confirm-payment/:donationId",
