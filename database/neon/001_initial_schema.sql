@@ -1,12 +1,11 @@
 -- Stream Pix - Neon/Postgres initial schema
 -- Run this entire file once in the Neon SQL Editor.
--- The application backend owns all database access; do not expose DATABASE_URL
--- to the Vite frontend.
+-- Firebase Auth owns user authentication; this backend owns all database access.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS public.users (
-  id uuid PRIMARY KEY,
+  id text PRIMARY KEY,
   email text NOT NULL UNIQUE,
   display_name text NOT NULL DEFAULT '',
   avatar_url text,
@@ -15,7 +14,7 @@ CREATE TABLE IF NOT EXISTS public.users (
 );
 
 CREATE TABLE IF NOT EXISTS public.streamer_settings (
-  user_id uuid PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,
+  user_id text PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,
   pix_key text NOT NULL DEFAULT '',
   alert_text text NOT NULL DEFAULT 'Obrigado pela doação!',
   primary_color text NOT NULL DEFAULT '#00FF88',
@@ -34,7 +33,7 @@ CREATE TABLE IF NOT EXISTS public.streamer_settings (
 
 CREATE TABLE IF NOT EXISTS public.donations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  streamer_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+  streamer_id text NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
   donor_name text NOT NULL DEFAULT 'Anônimo',
   amount numeric(12, 2) NOT NULL CHECK (amount > 0 AND amount <= 10000),
   donation_type text NOT NULL CHECK (donation_type IN ('text', 'audio', 'video')),
@@ -101,5 +100,5 @@ CREATE TRIGGER donations_set_updated_at
 BEFORE UPDATE ON public.donations
 FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
--- Neon Auth owns its own user table. The backend will create/upsert the
+-- Firebase Auth owns user authentication. The backend will create/upsert the
 -- matching row in public.users after each authenticated login.

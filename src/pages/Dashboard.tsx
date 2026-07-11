@@ -5,15 +5,18 @@ import Card from '../components/ui/Card'
 import Input from '../components/ui/Input'
 import Button from '../components/ui/Button'
 import Toast from '../components/ui/Toast'
-import { doc, setDoc, getDoc, collection, addDoc, onSnapshot, updateDoc, type DocumentSnapshot } from 'firebase/firestore'
-import { db, serverTimestamp } from '../services/firebase'
 import type { UserSettings, DonationEvent, DonationType, PaymentStatus } from '../types'
 import { DONATION_LABELS } from '../types'
 import { formatCurrency } from '../utils/formatCurrency'
 import QRCode from 'qrcode'
 
+const API_BASE = import.meta.env.VITE_API_URL
+  ? `https://${import.meta.env.VITE_API_URL}`
+  : 'http://localhost:3001'
+
 const TRANSACTIONS_PER_PAGE = 6
 const PAGE_GROUP_SIZE = 3
+const POLL_INTERVAL = 3000
 
 export default function Dashboard() {
   const { user } = useAuth()
@@ -53,39 +56,57 @@ export default function Dashboard() {
     hasLoadedDonationsRef.current = false
 
     const loadSettings = async () => {
-      const ref = doc(db, 'users', uid, 'settings', 'main')
-      const snap = await getDoc(ref)
-      if (snap.exists()) setSettings(snap.data() as UserSettings)
+      try {
+        const res = await fetch(`${API_BASE}/api/settings/${uid}`)
+        if (res.ok) {
+          const data = await res.json()
+          setSettings({
+            streamerName: data.streamerName || '',
+            pixKey: data.pixKey || '',
+            alertText: data.alertText || 'Obrigado pela doação!',
+            primaryColor: data.primaryColor || '#00FF88',
+            duration: data.duration || 5,
+            overlayEnabled: data.overlayEnabled ?? true,
+            theme: data.theme || 'neon',
+            soundEnabled: data.soundEnabled ?? true,
+            gifEnabled: data.gifEnabled ?? true,
+            overlayPosition: data.overlayPosition || 'bottom-center',
+            fontSize: data.fontSize || 'md',
+            cardSize: data.cardSize || 'normal',
+          })
+        }
+      } catch {
+        // silently fail
+      }
     }
 
-    const unsubscribeDonations = () => {
-      const donationsCol = collection(db, 'users', uid, 'donations')
-      return onSnapshot(donationsCol, (snaps) => {
+    const loadDonations = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/donations/${uid}`)
+        if (!res.ok) return
+
+        const { donations } = await res.json()
         let t = 0
         let count = 0
         const pending: (DonationEvent & { id: string })[] = []
         const history: (DonationEvent & { id: string })[] = []
 
-        snaps.forEach((d: DocumentSnapshot) => {
-          const data = d.data() as DonationEvent
-          const donation = { ...data, id: d.id }
-          if (data.isTest !== true && data.status === 'paid') {
-            t += data.amount || 0
+        for (const d of donations) {
+          if (d.isTest !== true && d.status === 'paid') {
+            t += d.amount || 0
             count++
           }
-
-          if (data.status === 'pending') {
-            pending.push(donation)
+          if (d.status === 'pending') {
+            pending.push(d)
           }
-
-          if (data.status !== 'pending') {
-            history.push(donation)
+          if (d.status !== 'pending') {
+            history.push(d)
           }
-        })
+        }
 
         const sortNewestFirst = (a: DonationEvent, b: DonationEvent) => {
-          const aTime = typeof a.createdAt === 'string' ? Date.parse(a.createdAt) : a.createdAt?.toMillis?.() || 0
-          const bTime = typeof b.createdAt === 'string' ? Date.parse(b.createdAt) : b.createdAt?.toMillis?.() || 0
+          const aTime = typeof a.createdAt === 'string' ? Date.parse(a.createdAt) : 0
+          const bTime = typeof b.createdAt === 'string' ? Date.parse(b.createdAt) : 0
           return bTime - aTime
         }
 
@@ -93,8 +114,8 @@ export default function Dashboard() {
         history.sort(sortNewestFirst)
 
         const previousIds = seenPendingDonationIdsRef.current
-        const newPending = pending.filter(donation => !previousIds.has(donation.id))
-        seenPendingDonationIdsRef.current = new Set(pending.map(donation => donation.id))
+        const newPending = pending.filter(donation => !previousIds.has(donation.id || ''))
+        seenPendingDonationIdsRef.current = new Set(pending.map(donation => donation.id || ''))
 
         if (hasLoadedDonationsRef.current && newPending.length > 0) {
           newPending.forEach(showDonationNotification)
@@ -105,10 +126,15 @@ export default function Dashboard() {
         setAlertsCount(count)
         setPendingDonations(pending)
         setTransactionHistory(history)
-      }, () => {
+      } catch {
         setToast('Erro ao carregar doações pendentes')
-      })
+      }
     }
+
+    loadSettings()
+    loadDonations()
+
+    const interval = setInterval(loadDonations, POLL_INTERVAL)
 
     const generateQrCode = async () => {
       const sendUrl = `${window.location.origin}/send/${uid}`
@@ -124,20 +150,25 @@ export default function Dashboard() {
       }
     }
 
-    loadSettings()
-    const unsubscribe = unsubscribeDonations()
     generateQrCode()
 
-    return unsubscribe
+    return () => clearInterval(interval)
   }, [uid])
 
   async function save() {
     if (!uid) return
     setSaving(true)
     try {
-      const ref = doc(db, 'users', uid, 'settings', 'main')
-      await setDoc(ref, settings, { merge: true })
-      setToast('Configurações salvas com sucesso!')
+      const res = await fetch(`${API_BASE}/api/settings/${uid}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings),
+      })
+      if (res.ok) {
+        setToast('Configurações salvas com sucesso!')
+      } else {
+        setToast('Erro ao salvar configurações')
+      }
     } catch {
       setToast('Erro ao salvar configurações')
     } finally {
@@ -172,16 +203,18 @@ export default function Dashboard() {
   async function simulateDonation(amount: number, type: DonationType, label: string) {
     if (!uid) return
     try {
-      const col = collection(db, 'users', uid, 'donations')
-      await addDoc(col, {
-        donorName: 'Teste Overlay',
-        amount,
-        type,
-        message: 'Teste rápido do overlay',
-        status: 'paid',
-        isTest: true,
-        createdAt: serverTimestamp(),
-        displayed: false,
+      await fetch(`${API_BASE}/api/donations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          streamerId: uid,
+          donorName: 'Teste Overlay',
+          amount,
+          type,
+          message: 'Teste rápido do overlay',
+          status: 'paid',
+          isTest: true,
+        }),
       })
       setToast(label)
     } catch {
@@ -193,11 +226,15 @@ export default function Dashboard() {
     if (!uid) return
     setProcessingDonationId(donationId)
     try {
-      await updateDoc(doc(db, 'users', uid, 'donations', donationId), {
-        status: 'paid',
-        paidAt: serverTimestamp(),
-        displayed: false,
-        isTest: false,
+      await fetch(`${API_BASE}/api/donations/${uid}/${donationId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'paid',
+          paidAt: new Date().toISOString(),
+          displayed: false,
+          isTest: false,
+        }),
       })
       setToast('Doação confirmada para o overlay')
     } catch {
@@ -211,9 +248,13 @@ export default function Dashboard() {
     if (!uid) return
     setProcessingDonationId(donationId)
     try {
-      await updateDoc(doc(db, 'users', uid, 'donations', donationId), {
-        status: 'failed',
-        failureReason: 'Pagamento recusado manualmente',
+      await fetch(`${API_BASE}/api/donations/${uid}/${donationId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'failed',
+          failureReason: 'Pagamento recusado manualmente',
+        }),
       })
       setToast('Doação recusada')
     } catch {
@@ -303,7 +344,7 @@ export default function Dashboard() {
     const createdAt = donation.createdAt
     if (!createdAt) return 'Agora'
 
-    const date = typeof createdAt === 'string' ? new Date(createdAt) : createdAt.toDate()
+    const date = new Date(createdAt)
     if (Number.isNaN(date.getTime())) return 'Agora'
 
     return date.toLocaleString('pt-BR', {
@@ -443,14 +484,14 @@ export default function Dashboard() {
 
                           <div className="flex md:flex-col gap-2 md:w-32 shrink-0">
                             <button
-                              onClick={() => confirmDonation(donation.id)}
+                              onClick={() => confirmDonation(donation.id!)}
                               disabled={processingDonationId === donation.id}
                               className="flex-1 md:flex-none px-3 py-2 rounded-xl bg-neon/10 text-neon text-sm font-semibold border border-neon/20 hover:bg-neon/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               Confirmar
                             </button>
                             <button
-                              onClick={() => rejectDonation(donation.id)}
+                              onClick={() => rejectDonation(donation.id!)}
                               disabled={processingDonationId === donation.id}
                               className="flex-1 md:flex-none px-3 py-2 rounded-xl bg-red-500/10 text-red-300 text-sm font-semibold border border-red-500/20 hover:bg-red-500/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
@@ -565,7 +606,7 @@ export default function Dashboard() {
               <Card>
                 <div className="flex items-center gap-2 mb-6">
                   <svg className="w-5 h-5 text-neon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
                     <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                   </svg>
                   <h3 className="text-base font-bold text-offwhite tracking-tight">Configurações do alerta</h3>

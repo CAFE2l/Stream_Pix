@@ -1,12 +1,14 @@
 import { useState, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
-import { collection, addDoc } from 'firebase/firestore'
-import { db, serverTimestamp } from '../services/firebase'
 import Navbar from '../components/layout/Navbar'
 import Input from '../components/ui/Input'
 import Button from '../components/ui/Button'
 import Card from '../components/ui/Card'
 import Toast from '../components/ui/Toast'
+
+const API_BASE = import.meta.env.VITE_API_URL
+  ? `https://${import.meta.env.VITE_API_URL}`
+  : 'http://localhost:3001'
 
 export default function SimulatePix() {
   const { userId } = useParams<{ userId: string }>()
@@ -21,19 +23,20 @@ export default function SimulatePix() {
     if (!userId) return
     setLoading(true)
     try {
-      const col = collection(db, 'users', userId, 'donations')
-      await addDoc(col, {
-        donorName: name || 'Anônimo',
-        amount: parseFloat(amount) || 0,
-        type: 'text',
-        message,
-        status: 'paid',
-        isTest: true,
-        createdAt: serverTimestamp(),
-        displayed: false,
-        txid: `test_${Date.now()}`,
-        donationId: crypto.randomUUID(),
-        streamerId: userId,
+      await fetch(`${API_BASE}/api/donations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          streamerId: userId,
+          donorName: name || 'Anônimo',
+          amount: parseFloat(amount) || 0,
+          type: 'text',
+          message,
+          status: 'paid',
+          isTest: true,
+          txid: `test_${Date.now()}`,
+          donationId: crypto.randomUUID(),
+        }),
       })
       setName('')
       setAmount('')
@@ -61,7 +64,7 @@ export default function SimulatePix() {
               </svg>
             </div>
             <h2 className="text-xl font-bold text-offwhite tracking-tight">Simular Pix</h2>
-            <p className="mt-1.5 text-sm text-sage">Cria uma doação de teste no Firestore</p>
+            <p className="mt-1.5 text-sm text-sage">Cria uma doação de teste no banco de dados</p>
           </div>
 
           <form onSubmit={submit} className="space-y-4">

@@ -1,5 +1,3 @@
-import type { Timestamp } from 'firebase/firestore'
-
 export type DonationType = 'text' | 'audio' | 'video'
 export type PaymentStatus = 'pending' | 'paid' | 'expired' | 'failed' | 'played'
 export type ThemePreset = 'neon' | 'minimal' | 'gamer' | 'cyberpunk' | 'clean'
@@ -81,9 +79,9 @@ export type DonationEvent = {
   audioUrl?: string
   videoUrl?: string
   status: PaymentStatus
-  createdAt?: Timestamp | string
-  paidAt?: Timestamp | string
-  playedAt?: Timestamp | string
+  createdAt?: string
+  paidAt?: string
+  playedAt?: string
   displayed?: boolean
   isTest?: boolean
   provider?: string

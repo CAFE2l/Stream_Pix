@@ -1,11 +1,9 @@
 import { Router, Request, Response } from 'express'
-import { adminDb, isConfigured } from '../services/firebaseAdmin.js'
+import { query } from '../services/db.js'
 import { pixProvider } from '../services/pixProvider.js'
 import crypto from 'crypto'
 
 const router = Router()
-
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'stream-pix-webhook-secret'
 
 function logDev(...args: unknown[]) {
   if (process.env.NODE_ENV !== 'production') {
@@ -41,12 +39,11 @@ router.post('/create-charge', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Mensagem muito longa (máximo 200 caracteres)' })
     }
 
-    if (!isConfigured) {
-      return res.status(503).json({ error: 'Firebase Admin não configurado no backend.' })
-    }
-
-    const settingsSnap = await adminDb.collection('users').doc(streamerId).collection('settings').doc('main').get()
-    const streamerPixKey = settingsSnap.exists ? String(settingsSnap.data()?.pixKey || '').trim() : ''
+    const settingsResult = await query<{ pix_key: string }>(
+      'SELECT pix_key FROM public.streamer_settings WHERE user_id = $1',
+      [streamerId]
+    )
+    const streamerPixKey = settingsResult.rows.length > 0 ? String(settingsResult.rows[0].pix_key || '').trim() : ''
 
     if (!streamerPixKey) {
       return res.status(400).json({ error: 'Streamer sem chave Pix configurada.' })
@@ -57,27 +54,28 @@ router.post('/create-charge', async (req: Request, res: Response) => {
       .replace(/[^a-zA-Z0-9]/g, '')
       .toLowerCase()
 
-    const donationData = {
-      donorName: name?.trim() || 'Anônimo',
-      amount,
-      type,
-      message: message?.trim() || '',
-      audioUrl: type === 'audio' ? (mediaUrl || null) : null,
-      videoUrl: type === 'video' ? (mediaUrl || null) : null,
-      cloudinaryPublicId: cloudinaryPublicId || null,
-      status: 'pending' as const,
-      isTest: false,
-      provider: process.env.PIX_PROVIDER || 'mock',
-      providerPaymentId: null,
-      createdAt: new Date().toISOString(),
-      paidAt: null,
-      txid,
-      donationId,
-      streamerId,
-      displayed: false,
-    }
+    const donorName = name?.trim() || 'Anônimo'
 
-    await adminDb.collection('users').doc(streamerId).collection('donations').doc(donationId).set(donationData)
+    await query(
+      `INSERT INTO public.donations (
+        streamer_id, donor_name, amount, donation_type, message,
+        audio_url, video_url, cloudinary_public_id, status, is_test,
+        provider, txid, donation_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', false, $9, $10, $11)`,
+      [
+        streamerId,
+        donorName,
+        amount,
+        type,
+        message?.trim() || '',
+        type === 'audio' ? (mediaUrl || null) : null,
+        type === 'video' ? (mediaUrl || null) : null,
+        cloudinaryPublicId || null,
+        process.env.PIX_PROVIDER || 'mock',
+        txid,
+        donationId,
+      ]
+    )
 
     logDev('create-charge', `Donation ${donationId} created`, { type, amount, txid })
 
@@ -85,16 +83,17 @@ router.post('/create-charge', async (req: Request, res: Response) => {
       txid,
       amount,
       pixKey: streamerPixKey,
-      payerName: donationData.donorName,
+      payerName: donorName,
       payerEmail: undefined,
       description: `Doação Stream Pix - ${type}`,
     })
 
-    await adminDb.collection('users').doc(streamerId).collection('donations').doc(donationId).update({
-      providerPaymentId: charge.paymentId,
-      pixCopiaECola: charge.pixCopiaECola,
-      qrCode: charge.qrCode,
-    })
+    await query(
+      `UPDATE public.donations
+       SET provider_payment_id = $1, pix_copia_e_cola = $2, qr_code = $3
+       WHERE streamer_id = $4 AND donation_id = $5`,
+      [charge.paymentId, charge.pixCopiaECola, charge.qrCode, streamerId, donationId]
+    )
 
     return res.json({
       donationId,
@@ -114,10 +113,6 @@ router.post('/create-charge', async (req: Request, res: Response) => {
 
 router.post('/webhook', async (req: Request, res: Response) => {
   try {
-    if (!isConfigured) {
-      return res.status(503).json({ error: 'Firebase Admin não configurado' })
-    }
-
     const headers: Record<string, string> = {}
     for (const [key, value] of Object.entries(req.headers)) {
       if (typeof value === 'string') {
@@ -131,54 +126,55 @@ router.post('/webhook', async (req: Request, res: Response) => {
       return res.status(200).json({ status: 'ignored' })
     }
 
-    const donationsRef = adminDb.collectionGroup('donations')
-    const snapshot = await donationsRef.where('txid', '==', webhookData.txid).get()
+    const result = await query<{ id: string; amount: number; donor_name: string; status: string }>(
+      'SELECT id, amount, donor_name, status FROM public.donations WHERE txid = $1',
+      [webhookData.txid]
+    )
 
-    if (snapshot.empty) {
+    if (result.rows.length === 0) {
       logDev('webhook', `No donation found for txid: ${webhookData.txid}`)
       return res.status(200).json({ status: 'ignored' })
     }
 
-    const docSnap = snapshot.docs[0]
-    const donationData = docSnap.data()
+    const donation = result.rows[0]
 
-    if (donationData.status === 'paid' || donationData.status === 'played') {
+    if (donation.status === 'paid' || donation.status === 'played') {
       return res.json({ status: 'already_confirmed' })
     }
 
     if (webhookData.status === 'approved' || webhookData.status === 'authorized') {
-      if (webhookData.amount && donationData.amount) {
+      if (webhookData.amount && donation.amount) {
         const receivedAmount = typeof webhookData.amount === 'number' ? webhookData.amount : Number(webhookData.amount)
-        if (Math.abs(receivedAmount - donationData.amount) > 0.01) {
-          await docSnap.ref.update({
-            status: 'failed',
-            failureReason: `Valor recebido (${receivedAmount}) não confere com o esperado (${donationData.amount})`,
-          })
+        if (Math.abs(receivedAmount - donation.amount) > 0.01) {
+          await query(
+            `UPDATE public.donations SET status = 'failed', failure_reason = $1 WHERE id = $2`,
+            [`Valor recebido (${receivedAmount}) não confere com o esperado (${donation.amount})`, donation.id]
+          )
           logDev('webhook', `Amount mismatch for ${webhookData.txid}`)
           return res.status(200).json({ status: 'amount_mismatch' })
         }
       }
 
-      await docSnap.ref.update({
-        status: 'paid',
-        paidAt: new Date().toISOString(),
-        providerStatus: 'approved',
-        endToEndId: webhookData.endToEndId || null,
-      })
+      await query(
+        `UPDATE public.donations
+         SET status = 'paid', paid_at = now(), provider_status = $1, end_to_end_id = $2
+         WHERE id = $3`,
+        [webhookData.status, webhookData.endToEndId || null, donation.id]
+      )
 
       logDev('webhook', `Donation ${webhookData.txid} confirmed as paid`, {
-        amount: donationData.amount,
-        donorName: donationData.donorName,
+        amount: donation.amount,
+        donorName: donation.donor_name,
       })
 
       return res.json({ status: 'confirmed' })
     }
 
     if (webhookData.status === 'rejected' || webhookData.status === 'cancelled') {
-      await docSnap.ref.update({
-        status: 'failed',
-        providerStatus: webhookData.status,
-      })
+      await query(
+        `UPDATE public.donations SET status = 'failed', provider_status = $1 WHERE id = $2`,
+        [webhookData.status, donation.id]
+      )
       logDev('webhook', `Donation ${webhookData.txid} ${webhookData.status}`)
       return res.json({ status: 'failed' })
     }
@@ -193,29 +189,35 @@ router.post('/webhook', async (req: Request, res: Response) => {
 router.get('/donations/:streamerId', async (req: Request, res: Response) => {
   try {
     const { streamerId } = req.params
-    const { status, type, isTest, limit = 50 } = req.query
+    const { status, type, isTest, limit = '50' } = req.query
 
-    if (!isConfigured) {
-      return res.status(503).json({ error: 'Firebase Admin não configurado' })
-    }
-
-    const donationsRef = adminDb.collection('users').doc(streamerId).collection('donations')
-    let query = donationsRef.orderBy('createdAt', 'desc')
+    let sql = 'SELECT * FROM public.donations WHERE streamer_id = $1'
+    const params: unknown[] = [streamerId]
+    let paramIdx = 2
 
     if (status && typeof status === 'string') {
-      query = query.where('status', '==', status)
+      sql += ` AND status = $${paramIdx}`
+      params.push(status)
+      paramIdx++
     }
 
     if (type && typeof type === 'string') {
-      query = query.where('type', '==', type)
+      sql += ` AND donation_type = $${paramIdx}`
+      params.push(type)
+      paramIdx++
     }
 
     if (isTest !== undefined) {
-      query = query.where('isTest', '==', isTest === 'true')
+      sql += ` AND is_test = $${paramIdx}`
+      params.push(isTest === 'true')
+      paramIdx++
     }
 
-    const snapshot = await query.limit(Number(limit)).get()
-    const donations = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+    sql += ` ORDER BY created_at DESC LIMIT $${paramIdx}`
+    params.push(Number(limit))
+
+    const result = await query(sql, params)
+    const donations = result.rows.map(doc => ({ id: doc.id, ...doc }))
 
     return res.json({ donations })
   } catch (error) {
@@ -228,18 +230,15 @@ router.post('/donations/:streamerId/:donationId/replay', async (req: Request, re
   try {
     const { streamerId, donationId } = req.params
 
-    if (!isConfigured) {
-      return res.status(503).json({ error: 'Firebase Admin não configurado' })
-    }
+    const result = await query(
+      `UPDATE public.donations SET displayed = false, status = 'paid'
+       WHERE streamer_id = $1 AND id::text = $2 RETURNING id`,
+      [streamerId, donationId]
+    )
 
-    const donationRef = adminDb.collection('users').doc(streamerId).collection('donations').doc(donationId)
-    const docSnap = await donationRef.get()
-
-    if (!docSnap.exists) {
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Doação não encontrada' })
     }
-
-    await donationRef.update({ displayed: false, status: 'paid' })
 
     logDev('replay', `Donation ${donationId} marked for replay`)
     return res.json({ status: 'queued_for_replay' })

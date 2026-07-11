@@ -1,15 +1,11 @@
 import { Router, Request, Response } from "express";
-import { adminDb, isConfigured } from "../services/firebaseAdmin.js";
+import { query } from "../services/db.js";
 import { createCryptoCharge } from "../services/cryptoProvider.js";
 
 const router = Router();
 
 router.post("/create-charge", async (req: Request, res: Response) => {
   try {
-    if (!isConfigured) {
-      return res.status(503).json({ error: "Firebase Admin não configurado" });
-    }
-
     const { txid, amount, payerName, streamerId } = req.body;
 
     if (!txid || !amount || !payerName || !streamerId) {
@@ -18,17 +14,12 @@ router.post("/create-charge", async (req: Request, res: Response) => {
 
     const charge = createCryptoCharge(txid, amount);
 
-    await adminDb
-      .collection("users")
-      .doc(streamerId)
-      .collection("donations")
-      .doc(txid)
-      .update({
-        provider: "crypto",
-        cryptoAddress: charge.address,
-        cryptoAsset: charge.asset,
-        cryptoNetwork: charge.network,
-      });
+    await query(
+      `UPDATE public.donations
+       SET provider = 'crypto', crypto_transaction_id = $1
+       WHERE streamer_id = $2 AND txid = $3`,
+      [charge.address, streamerId, txid]
+    );
 
     return res.json({
       txid,

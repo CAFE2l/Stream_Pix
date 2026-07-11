@@ -1,6 +1,5 @@
 import { initializeApp } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
-import { getFirestore, serverTimestamp } from 'firebase/firestore'
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -15,16 +14,12 @@ const isConfigured = Object.values(firebaseConfig).every(v => v !== undefined &&
 
 let app: ReturnType<typeof initializeApp>
 export let auth: ReturnType<typeof getAuth>
-export let db: ReturnType<typeof getFirestore>
 
 if (isConfigured) {
   app = initializeApp(firebaseConfig)
   auth = getAuth(app)
-  db = getFirestore(app)
 } else {
   auth = {} as ReturnType<typeof getAuth>
-  db = {} as ReturnType<typeof getFirestore>
 }
 
-export { serverTimestamp }
 export { isConfigured }

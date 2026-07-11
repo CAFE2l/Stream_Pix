@@ -1,7 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams } from 'react-router-dom'
-import { doc, getDoc, onSnapshot } from 'firebase/firestore'
-import { db } from '../services/firebase'
 import { uploadToCloudinary } from '../services/cloudinary'
 import type { UserSettings, DonationType, PaymentStatus } from '../types'
 import { MIN_AMOUNTS, DONATION_LABELS } from '../types'
@@ -12,7 +10,9 @@ import PixPayment from '../components/send/PixPayment'
 import Input from '../components/ui/Input'
 import useAuth from '../hooks/useAuth'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+const API_BASE = import.meta.env.VITE_API_URL
+  ? `https://${import.meta.env.VITE_API_URL}`
+  : 'http://localhost:3001'
 const ENABLE_MANUAL_CONFIRM = import.meta.env.VITE_ENABLE_MANUAL_CONFIRM === 'true'
 
 export default function SendDonation() {
@@ -38,7 +38,7 @@ export default function SendDonation() {
   const [pixCopiaECola, setPixCopiaECola] = useState('')
   const [confirmingPayment, setConfirmingPayment] = useState(false)
 
-  const unsubRef = useRef<(() => void) | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const isStreamerOwner = ENABLE_MANUAL_CONFIRM && user && user.uid === streamerId
 
@@ -47,10 +47,23 @@ export default function SendDonation() {
 
     const loadSettings = async () => {
       try {
-        const docRef = doc(db, 'users', streamerId, 'settings', 'main')
-        const snap = await getDoc(docRef)
-        if (snap.exists()) {
-          setSettings(snap.data() as UserSettings)
+        const res = await fetch(`${API_BASE}/api/settings/${streamerId}`)
+        if (res.ok) {
+          const data = await res.json()
+          setSettings({
+            streamerName: data.streamerName || '',
+            pixKey: data.pixKey || '',
+            alertText: data.alertText || 'Obrigado pela doação!',
+            primaryColor: data.primaryColor || '#00FF88',
+            duration: data.duration || 5,
+            overlayEnabled: data.overlayEnabled ?? true,
+            theme: data.theme || 'neon',
+            soundEnabled: data.soundEnabled ?? true,
+            gifEnabled: data.gifEnabled ?? true,
+            overlayPosition: data.overlayPosition || 'bottom-center',
+            fontSize: data.fontSize || 'md',
+            cardSize: data.cardSize || 'normal',
+          })
         }
       } catch {
         // silently fail
@@ -63,30 +76,30 @@ export default function SendDonation() {
   useEffect(() => {
     if (!streamerId || !donationId) return
 
-    if (unsubRef.current) {
-      unsubRef.current()
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
     }
 
-    const docRef = doc(db, 'users', streamerId, 'donations', donationId)
-
-    unsubRef.current = onSnapshot(docRef, (snap) => {
-      if (snap.exists()) {
-        const data = snap.data()
-        setStatus(data.status || 'pending')
-
-        if (data.status === 'paid') {
-          setSuccess(true)
+    const pollStatus = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/donations/txid/${donationId}`)
+        if (res.ok) {
+          const { donation } = await res.json()
+          setStatus(donation.status || 'pending')
+          if (donation.status === 'paid') {
+            setSuccess(true)
+            if (pollRef.current) clearInterval(pollRef.current)
+          }
         }
+      } catch {
+        // silently fail
       }
-    }, (err) => {
-      console.error('Erro ao ouvir doação:', err)
-    })
+    }
+
+    pollRef.current = setInterval(pollStatus, 3000)
 
     return () => {
-      if (unsubRef.current) {
-        unsubRef.current()
-        unsubRef.current = null
-      }
+      if (pollRef.current) clearInterval(pollRef.current)
     }
   }, [streamerId, donationId])
 
@@ -119,8 +132,6 @@ export default function SendDonation() {
         const errData = await response.json().catch(() => ({ error: 'Erro desconhecido' }))
         throw new Error(errData.error || 'Erro ao confirmar pagamento')
       }
-
-      // Firestore listener will update status automatically
     } catch (err) {
       console.error('Erro ao confirmar pagamento:', err)
       const msg = err instanceof Error ? err.message : 'Erro desconhecido'
@@ -215,9 +226,7 @@ export default function SendDonation() {
 
   useEffect(() => {
     return () => {
-      if (unsubRef.current) {
-        unsubRef.current()
-      }
+      if (pollRef.current) clearInterval(pollRef.current)
     }
   }, [])
 

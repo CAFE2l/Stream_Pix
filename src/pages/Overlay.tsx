@@ -1,7 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
-import { db } from '../services/firebase'
-import { collection, query, where, orderBy, onSnapshot, updateDoc, doc, type QuerySnapshot, type DocumentData } from 'firebase/firestore'
 import type { DonationEvent, UserSettings } from '../types'
 import { formatCurrency } from '../utils/formatCurrency'
 import { getDonationSound } from '../utils/getDonationSound'
@@ -9,8 +7,13 @@ import moedaGif from '../assets/images/gifs/moeda_mario.gif'
 import dinheiroAsaGif from '../assets/images/gifs/cash.gif'
 import montanteGif from '../assets/images/gifs/montante.gif'
 
+const API_BASE = import.meta.env.VITE_API_URL
+  ? `https://${import.meta.env.VITE_API_URL}`
+  : 'http://localhost:3001'
+
 const DEFAULT_COLOR = '#00FF88'
 const DEFAULT_DURATION = 5
+const POLL_INTERVAL = 2000
 
 function getDonationGif(amount: number) {
   if (amount <= 10) return moedaGif
@@ -71,7 +74,11 @@ export default function Overlay() {
 
     if (!userId) return
     try {
-      await updateDoc(doc(db, 'users', userId, 'donations', donation.id), { displayed: true })
+      await fetch(`${API_BASE}/api/donations/${userId}/${donation.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ displayed: true }),
+      })
     } catch {
       // silently fail
     }
@@ -208,40 +215,56 @@ export default function Overlay() {
   useEffect(() => {
     if (!userId) return
 
-    const settingsDoc = doc(db, 'users', userId, 'settings', 'main')
-    const unsubSettings = onSnapshot(settingsDoc, snap => {
-      if (snap.exists()) {
-        setSettings(snap.data() as UserSettings)
-      }
-    })
-
-    const donationsCol = collection(db, 'users', userId, 'donations')
-    const q = query(donationsCol, where('status', '==', 'paid'), where('displayed', '==', false), orderBy('createdAt', 'asc'))
-    const unsub = onSnapshot(q, (snapshot: QuerySnapshot<DocumentData>) => {
-      if (snapshot.empty) return
-
-      const existingIds = new Set(queueRef.current.map(d => d.id))
-      if (active) existingIds.add(active.id)
-
-      let hasNew = false
-      for (const docSnap of snapshot.docs) {
-        const data = { id: docSnap.id, ...docSnap.data() } as DonationEvent & { id: string }
-        if (!seenIdsRef.current.has(docSnap.id) && !existingIds.has(docSnap.id)) {
-          queueRef.current.push(data)
-          seenIdsRef.current.add(docSnap.id)
-          hasNew = true
+    const fetchUpdates = async () => {
+      try {
+        const settingsRes = await fetch(`${API_BASE}/api/settings/${userId}`)
+        if (settingsRes.ok) {
+          const data = await settingsRes.json()
+          setSettings({
+            streamerName: data.streamerName || '',
+            pixKey: data.pixKey || '',
+            alertText: data.alertText || 'Obrigado pela doação!',
+            primaryColor: data.primaryColor || '#00FF88',
+            duration: data.duration || 5,
+            overlayEnabled: data.overlayEnabled ?? true,
+            theme: data.theme || 'neon',
+            soundEnabled: data.soundEnabled ?? true,
+            gifEnabled: data.gifEnabled ?? true,
+            overlayPosition: data.overlayPosition || 'bottom-center',
+            fontSize: data.fontSize || 'md',
+            cardSize: data.cardSize || 'normal',
+          })
         }
-      }
 
-      if (hasNew && !processingRef.current) {
-        processQueue()
-      }
-    })
+        const donationsRes = await fetch(`${API_BASE}/api/donations/${userId}/overlay`)
+        if (donationsRes.ok) {
+          const { donations } = await donationsRes.json()
 
-    return () => {
-      unsub()
-      unsubSettings()
+          const existingIds = new Set(queueRef.current.map(d => d.id))
+          if (active) existingIds.add(active.id)
+
+          let hasNew = false
+          for (const donation of donations) {
+            if (!seenIdsRef.current.has(donation.id) && !existingIds.has(donation.id)) {
+              queueRef.current.push(donation)
+              seenIdsRef.current.add(donation.id)
+              hasNew = true
+            }
+          }
+
+          if (hasNew && !processingRef.current) {
+            processQueue()
+          }
+        }
+      } catch {
+        // silently fail
+      }
     }
+
+    fetchUpdates()
+    const interval = setInterval(fetchUpdates, POLL_INTERVAL)
+
+    return () => clearInterval(interval)
   }, [userId, processQueue])
 
   useEffect(() => {

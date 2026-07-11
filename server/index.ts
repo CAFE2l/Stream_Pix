@@ -3,8 +3,10 @@ import express, { Request, Response } from "express";
 import cors from "cors";
 import pixRoutes from "./routes/pix.js";
 import cryptoRoutes from "./routes/crypto.js";
-import { adminDb, isConfigured } from "./services/firebaseAdmin.js";
+import settingsRoutes from "./routes/settings.js";
+import donationsRoutes from "./routes/donations.js";
 import { startCryptoMonitor } from "./services/cryptoProvider.js";
+import { query } from "./services/db.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -17,18 +19,14 @@ app.use(
       "http://localhost:3000",
       process.env.FRONTEND_URL,
     ].filter(Boolean) as string[],
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
 app.use(express.json());
 
-if (!isConfigured) {
-  console.warn(
-    "[Server] Firebase Admin não configurado — requisições ao /api/pix retornarão 503",
-  );
-}
-
+app.use("/api/settings", settingsRoutes);
+app.use("/api/donations", donationsRoutes);
 app.use("/api/pix", pixRoutes);
 app.use("/api/crypto", cryptoRoutes);
 
@@ -43,12 +41,6 @@ app.post(
         .json({ error: "Endpoint indisponível em produção" });
     }
 
-    if (!isConfigured) {
-      return res
-        .status(503)
-        .json({ error: "Firebase Admin não configurado no backend" });
-    }
-
     try {
       const { donationId } = req.params;
       const { streamerId } = req.body as { streamerId?: string };
@@ -57,27 +49,27 @@ app.post(
         return res.status(400).json({ error: "streamerId é obrigatório" });
       }
 
-      const donationRef = adminDb
-        .collection("users")
-        .doc(streamerId)
-        .collection("donations")
-        .doc(String(donationId));
-      const docSnap = await donationRef.get();
+      const result = await query<{ id: string; status: string }>(
+        `SELECT id, status FROM public.donations
+         WHERE streamer_id = $1 AND id::text = $2`,
+        [streamerId, donationId]
+      );
 
-      if (!docSnap.exists) {
+      if (result.rows.length === 0) {
         return res.status(404).json({ error: "Doação não encontrada" });
       }
 
-      const data = docSnap.data();
-      if (data?.status === "paid") {
+      const donation = result.rows[0];
+      if (donation.status === "paid") {
         return res.json({ status: "already_confirmed" });
       }
 
-      await donationRef.update({
-        status: "paid",
-        paidAt: new Date().toISOString(),
-        isTest: true,
-      });
+      await query(
+        `UPDATE public.donations
+         SET status = 'paid', paid_at = now()
+         WHERE id = $1`,
+        [donation.id]
+      );
 
       console.log(`[DEV] Donation ${donationId} marked as paid`);
       return res.json({ status: "confirmed" });
@@ -89,12 +81,6 @@ app.post(
 );
 
 app.post("/api/admin/confirm-payment", async (req: Request, res: Response) => {
-  if (!isConfigured) {
-    return res
-      .status(503)
-      .json({ error: "Firebase Admin não configurado no backend" });
-  }
-
   try {
     const { donationId, streamerId, adminToken } = req.body;
 
@@ -102,27 +88,27 @@ app.post("/api/admin/confirm-payment", async (req: Request, res: Response) => {
       return res.status(401).json({ error: "Não autorizado" });
     }
 
-    const donationRef = adminDb
-      .collection("users")
-      .doc(streamerId)
-      .collection("donations")
-      .doc(donationId);
-    const docSnap = await donationRef.get();
+    const result = await query<{ id: string; status: string }>(
+      `SELECT id, status FROM public.donations
+       WHERE streamer_id = $1 AND id::text = $2`,
+      [streamerId, donationId]
+    );
 
-    if (!docSnap.exists) {
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: "Doação não encontrada" });
     }
 
-    const data = docSnap.data();
-    if (data?.status === "paid") {
+    const donation = result.rows[0];
+    if (donation.status === "paid") {
       return res.json({ status: "already_confirmed" });
     }
 
-    await donationRef.update({
-      status: "paid",
-      paidAt: new Date().toISOString(),
-      isTest: true,
-    });
+    await query(
+      `UPDATE public.donations
+       SET status = 'paid', paid_at = now()
+       WHERE id = $1`,
+      [donation.id]
+    );
 
     return res.json({ status: "confirmed" });
   } catch (error) {
@@ -135,7 +121,7 @@ app.get("/api/health", (_req, res) => {
   res.json({
     status: "ok",
     port: PORT,
-    firebaseAdmin: isConfigured ? "configured" : "not_configured",
+    database: "neon_postgres",
     nodeEnv: process.env.NODE_ENV || "development",
     timestamp: new Date().toISOString(),
   });

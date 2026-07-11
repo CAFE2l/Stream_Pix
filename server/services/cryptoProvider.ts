@@ -1,21 +1,17 @@
-import { adminDb, isConfigured } from "./firebaseAdmin.js";
-import * as crypto from "crypto";
+import { query } from "./db.js";
 
 const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 const TRON_GRID = "https://api.trongrid.io";
 
 let tronGridApiKey = process.env.TRONGRID_API_KEY || "";
 
-interface PendingCharge {
-  txid: string;
-  streamerId: string;
+interface DonationRow {
+  id: string;
   amount: number;
-  payerName: string;
-  createdAt: number;
+  provider: string;
 }
 
 async function checkUsdtTransfers(): Promise<void> {
-  if (!isConfigured) return;
   if (!process.env.TRON_USDT_ADDRESS) return;
 
   try {
@@ -34,23 +30,22 @@ async function checkUsdtTransfers(): Promise<void> {
       const value = Number(tx.value) / 1_000_000;
       const txId = tx.transaction_id;
 
-      const snapshot = await adminDb
-        .collectionGroup("donations")
-        .where("paid", "==", false)
-        .where("amount", "==", value)
-        .where("provider", "==", "crypto")
-        .get();
+      const result = await query<DonationRow>(
+        `SELECT id, amount, provider FROM public.donations
+         WHERE status = 'pending' AND amount = $1 AND provider = 'crypto'`,
+        [value]
+      );
 
-      if (snapshot.empty) continue;
+      if (result.rows.length === 0) continue;
 
-      for (const doc of snapshot.docs) {
-        await doc.ref.update({
-          paid: true,
-          paidAt: new Date().toISOString(),
-          cryptoConfirmedAt: new Date().toISOString(),
-          cryptoTransactionId: txId,
-          status: "approved",
-        });
+      for (const donation of result.rows) {
+        await query(
+          `UPDATE public.donations
+           SET status = 'paid', paid_at = now(), provider_status = 'approved',
+               crypto_transaction_id = $1
+           WHERE id = $2`,
+          [txId, donation.id]
+        );
       }
     }
   } catch (err) {
