@@ -10,8 +10,9 @@ import { DONATION_LABELS } from '../types'
 import { formatCurrency } from '../utils/formatCurrency'
 import QRCode from 'qrcode'
 
-const API_BASE = import.meta.env.VITE_API_URL
-  ? `https://${import.meta.env.VITE_API_URL}`
+const rawApi = import.meta.env.VITE_API_URL || ''
+const API_BASE = rawApi.startsWith('http') ? rawApi
+  : rawApi ? `https://${rawApi}`
   : 'http://localhost:3001'
 
 const TRANSACTIONS_PER_PAGE = 6

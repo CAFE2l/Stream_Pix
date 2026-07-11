@@ -6,8 +6,9 @@ import Button from '../components/ui/Button'
 import Card from '../components/ui/Card'
 import Toast from '../components/ui/Toast'
 
-const API_BASE = import.meta.env.VITE_API_URL
-  ? `https://${import.meta.env.VITE_API_URL}`
+const rawApi = import.meta.env.VITE_API_URL || ''
+const API_BASE = rawApi.startsWith('http') ? rawApi
+  : rawApi ? `https://${rawApi}`
   : 'http://localhost:3001'
 
 export default function SimulatePix() {

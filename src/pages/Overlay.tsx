@@ -7,8 +7,9 @@ import moedaGif from '../assets/images/gifs/moeda_mario.gif'
 import dinheiroAsaGif from '../assets/images/gifs/cash.gif'
 import montanteGif from '../assets/images/gifs/montante.gif'
 
-const API_BASE = import.meta.env.VITE_API_URL
-  ? `https://${import.meta.env.VITE_API_URL}`
+const rawApi = import.meta.env.VITE_API_URL || ''
+const API_BASE = rawApi.startsWith('http') ? rawApi
+  : rawApi ? `https://${rawApi}`
   : 'http://localhost:3001'
 
 const DEFAULT_COLOR = '#00FF88'

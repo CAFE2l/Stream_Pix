@@ -10,8 +10,9 @@ import PixPayment from '../components/send/PixPayment'
 import Input from '../components/ui/Input'
 import useAuth from '../hooks/useAuth'
 
-const API_BASE = import.meta.env.VITE_API_URL
-  ? `https://${import.meta.env.VITE_API_URL}`
+const rawApi = import.meta.env.VITE_API_URL || ''
+const API_BASE = rawApi.startsWith('http') ? rawApi
+  : rawApi ? `https://${rawApi}`
   : 'http://localhost:3001'
 const ENABLE_MANUAL_CONFIRM = import.meta.env.VITE_ENABLE_MANUAL_CONFIRM === 'true'
 
